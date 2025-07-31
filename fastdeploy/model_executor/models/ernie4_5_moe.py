@@ -473,6 +473,10 @@ class Ernie4_5_PretrainedModel(PretrainedModel):
         """
         return None
 
+    @classmethod
+    def arch_name(self):
+        return "Ernie4_5_MoeForCausalLM"
+
     weight_infos = [
         WeightMeta(
             f".layers.{{{layerid.LAYER_ID}}}.self_attn.qkv_proj.weight",
@@ -594,3 +598,16 @@ class Ernie4_5_PretrainedModel(PretrainedModel):
             config.prefix_name,
         )
         return mappings
+
+
+class Ernie4_5_DensePretrainedModel(Ernie4_5_PretrainedModel):
+    """
+    Ernie4_5_DensePretrainedModel
+    """
+
+    @classmethod
+    def arch_name(self):
+        """
+        Model Architecture Name
+        """
+        return "Ernie4_5_ForCausalLM"

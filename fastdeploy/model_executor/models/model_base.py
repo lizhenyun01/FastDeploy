@@ -20,6 +20,7 @@ from typing import Dict, Union
 import numpy as np
 import paddle
 from paddle import nn
+from paddleformers.transformers import PretrainedModel
 
 
 class ModelRegistry:
@@ -28,13 +29,39 @@ class ModelRegistry:
     """
 
     _registry = {}
+    _model_classes = {}
 
     @classmethod
-    def register(cls, model_class):
+    def register_model_class(cls, model_class):
         """register model class"""
         if issubclass(model_class, ModelForCasualLM) and model_class is not ModelForCasualLM:
+            # print(model_class.name())
             cls._registry[model_class.name()] = model_class
         return model_class
+
+    @classmethod
+    def register_pretrained_model(cls, pretrained_model):
+        """register pretrained model class"""
+        if (
+            issubclass(pretrained_model, PretrainedModel)
+            and pretrained_model is not PretrainedModel
+            and hasattr(pretrained_model, "arch_name")
+        ):
+            # print(pretrained_model.arch_name())
+            cls._model_classes[pretrained_model.arch_name()] = pretrained_model
+
+        return pretrained_model
+
+    @classmethod
+    def register(cls, model_class, pretrained_model):
+        """register model class and pretrained model class"""
+        cls.register_model_class(model_class)
+        cls.register_pretrained_model(pretrained_model)
+
+    @classmethod
+    def get_pretrain_cls(cls, architectures: str):
+        """get_pretrain_cls"""
+        return cls._model_classes[architectures]
 
     @classmethod
     def get_class(cls, name):
@@ -42,6 +69,11 @@ class ModelRegistry:
         if name not in cls._registry:
             raise ValueError(f"Model '{name}' is not registered!")
         return cls._registry[name]
+
+    @classmethod
+    def get_supported_archs(cls):
+        assert len(cls._registry) == len(cls._registry), "model class / pretrained model registry num is not same"
+        return [key for key in cls._registry.keys()]
 
 
 class ModelForCasualLM(nn.Layer, ABC):

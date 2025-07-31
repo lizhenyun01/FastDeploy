@@ -624,6 +624,10 @@ class Ernie4_5_VLPretrainedModel(PretrainedModel):
         """
         return None
 
+    @classmethod
+    def arch_name(self):
+        return "Ernie4_5_VLMoeForConditionalGeneration"
+
     from fastdeploy.model_executor.models.tp_utils import TensorSplitMode as tsm
     from fastdeploy.model_executor.models.utils import LayerIdPlaceholder as layerid
     from fastdeploy.model_executor.models.utils import WeightMeta
