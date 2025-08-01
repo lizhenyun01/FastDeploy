@@ -28,15 +28,15 @@ class ModelRegistry:
     Used to register and retrieve model classes.
     """
 
-    _registry = {}
-    _model_classes = {}
+    _arch_to_model_cls = {}
+    _arch_to_pretrained_model_cls = {}
 
     @classmethod
     def register_model_class(cls, model_class):
         """register model class"""
         if issubclass(model_class, ModelForCasualLM) and model_class is not ModelForCasualLM:
             # print(model_class.name())
-            cls._registry[model_class.name()] = model_class
+            cls._arch_to_model_cls[model_class.name()] = model_class
         return model_class
 
     @classmethod
@@ -47,33 +47,28 @@ class ModelRegistry:
             and pretrained_model is not PretrainedModel
             and hasattr(pretrained_model, "arch_name")
         ):
-            # print(pretrained_model.arch_name())
-            cls._model_classes[pretrained_model.arch_name()] = pretrained_model
+            cls._arch_to_pretrained_model_cls[pretrained_model.arch_name()] = pretrained_model
 
         return pretrained_model
 
     @classmethod
-    def register(cls, model_class, pretrained_model):
-        """register model class and pretrained model class"""
-        cls.register_model_class(model_class)
-        cls.register_pretrained_model(pretrained_model)
-
-    @classmethod
     def get_pretrain_cls(cls, architectures: str):
         """get_pretrain_cls"""
-        return cls._model_classes[architectures]
+        return cls._arch_to_pretrained_model_cls[architectures]
 
     @classmethod
     def get_class(cls, name):
         """get model class"""
-        if name not in cls._registry:
+        if name not in cls._arch_to_model_cls:
             raise ValueError(f"Model '{name}' is not registered!")
-        return cls._registry[name]
+        return cls._arch_to_model_cls[name]
 
     @classmethod
     def get_supported_archs(cls):
-        assert len(cls._registry) == len(cls._registry), "model class / pretrained model registry num is not same"
-        return [key for key in cls._registry.keys()]
+        assert len(cls._arch_to_model_cls) == len(
+            cls._arch_to_model_cls
+        ), "model class / pretrained model registry num is not same"
+        return [key for key in cls._arch_to_model_cls.keys()]
 
 
 class ModelForCasualLM(nn.Layer, ABC):

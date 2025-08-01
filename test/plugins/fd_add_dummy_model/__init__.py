@@ -31,4 +31,5 @@ class MyModelForCasualLM(ModelForCasualLM):
 
 def register():
     if "MyModelForCasualLM" not in ModelRegistry.get_supported_archs():
-        ModelRegistry.register(MyModelForCasualLM, MyPretrainedModel)
+        ModelRegistry.register_model_class(MyModelForCasualLM)
+        ModelRegistry.register_pretrained_model(MyPretrainedModel)

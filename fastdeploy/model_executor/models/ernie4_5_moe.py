@@ -460,9 +460,9 @@ class Ernie4_5_ForCausalLM(Ernie4_5_MoeForCausalLM):
         return "Ernie4_5_ForCausalLM"
 
 
-class Ernie4_5_PretrainedModel(PretrainedModel):
+class Ernie4_5_MoePretrainedModel(PretrainedModel):
     """
-    Ernie4_5_PretrainedModel
+    Ernie4_5_MoePretrainedModel
     """
 
     config_class = FDConfig
@@ -600,9 +600,9 @@ class Ernie4_5_PretrainedModel(PretrainedModel):
         return mappings
 
 
-class Ernie4_5_DensePretrainedModel(Ernie4_5_PretrainedModel):
+class Ernie4_5_PretrainedModel(Ernie4_5_MoePretrainedModel):
     """
-    Ernie4_5_DensePretrainedModel
+    Ernie4_5_PretrainedModel
     """
 
     @classmethod

@@ -18,6 +18,8 @@ from fastdeploy.plugins import load_model_register_plugins
 initial_archs = ModelRegistry.get_supported_archs()
 print("Supported architectures before loading plugins:", initial_archs)
 
+# python setup.py isntall
+# need install fastdeploy-plugins
 load_model_register_plugins()
 
 final_archs = ModelRegistry.get_supported_archs()
@@ -25,7 +27,6 @@ print("Supported architectures after loading plugins:", final_archs)
 
 added_count = len(final_archs) - len(initial_archs)
 
-added_count = len(final_archs) - len(initial_archs)
 if added_count != 1:
     print(
         f"Warning: Expected exactly 1 new architecture to be registered, but got {added_count}. "

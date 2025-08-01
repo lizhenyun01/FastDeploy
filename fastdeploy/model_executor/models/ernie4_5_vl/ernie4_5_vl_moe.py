@@ -613,7 +613,7 @@ class Ernie4_5_VLMoeForConditionalGeneration(ModelForCasualLM):
 
 class Ernie4_5_VLPretrainedModel(PretrainedModel):
     """
-    Ernie4_5_PretrainedModel
+    Ernie4_5_MoePretrainedModel
     """
 
     config_class = FDConfig
