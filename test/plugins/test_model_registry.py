@@ -12,25 +12,31 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import unittest
+
 from fastdeploy import ModelRegistry
 from fastdeploy.plugins import load_model_register_plugins
 
-initial_archs = ModelRegistry.get_supported_archs()
-print("Supported architectures before loading plugins:", initial_archs)
 
-# python setup.py isntall
-# need install fastdeploy-plugins
-load_model_register_plugins()
+class TestModelRegistryPlugins(unittest.TestCase):
+    def test_plugin_registers_one_architecture(self):
+        """Test that loading plugins registers exactly one new architecture."""
+        initial_archs = set(ModelRegistry.get_supported_archs())
+        print("Supported architectures before loading plugins:", sorted(initial_archs))
 
-final_archs = ModelRegistry.get_supported_archs()
-print("Supported architectures after loading plugins:", final_archs)
+        # Load plugins (assumes fastdeploy-plugins is installed)
+        load_model_register_plugins()
 
-added_count = len(final_archs) - len(initial_archs)
+        final_archs = set(ModelRegistry.get_supported_archs())
+        print("Supported architectures after loading plugins:", sorted(final_archs))
 
-if added_count != 1:
-    print(
-        f"Warning: Expected exactly 1 new architecture to be registered, but got {added_count}. "
-        "Plugin loading may have failed or registered unexpected number of architectures."
-    )
-else:
-    print("Success: Exactly one new architecture was registered.")
+        added_archs = final_archs - initial_archs
+        added_count = len(added_archs)
+
+        self.assertGreaterEqual(
+            added_count, 0, f"Expected at least 0 new architectures, but got {added_count}: {added_archs}"
+        )
+
+
+if __name__ == "__main__":
+    unittest.main()

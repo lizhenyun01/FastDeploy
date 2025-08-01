@@ -87,9 +87,7 @@ def _patch_fastsafetensors():
 _patch_fastsafetensors()
 
 
-MODULE_ATTRS = {
-    "ModelRegistry": ".model_executor.models.model_base:ModelRegistry",
-}
+MODULE_ATTRS = {"ModelRegistry": ".model_executor.models.model_base:ModelRegistry", "version": ".utils:version"}
 
 
 if typing.TYPE_CHECKING:
@@ -100,15 +98,14 @@ else:
         from importlib import import_module
 
         if name in MODULE_ATTRS:
-            module_name, attr_name = MODULE_ATTRS[name].split(":")
-            module = import_module(module_name, __package__)
-            return getattr(module, attr_name)
+            try:
+                module_name, attr_name = MODULE_ATTRS[name].split(":")
+                module = import_module(module_name, __package__)
+                return getattr(module, attr_name)
+            except ModuleNotFoundError:
+                print(f"Module {MODULE_ATTRS[name]} not found.")
         else:
-            raise AttributeError(f"module {__package__} has no attribute {name}")
+            print(f"module {__package__} has no attribute {name}")
 
 
-__all__ = [
-    "LLM",
-    "SamplingParams",
-    "ModelRegistry",
-]
+__all__ = ["LLM", "SamplingParams", "ModelRegistry", "version"]
