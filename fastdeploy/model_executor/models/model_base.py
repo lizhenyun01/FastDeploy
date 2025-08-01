@@ -35,7 +35,6 @@ class ModelRegistry:
     def register_model_class(cls, model_class):
         """register model class"""
         if issubclass(model_class, ModelForCasualLM) and model_class is not ModelForCasualLM:
-            # print(model_class.name())
             cls._arch_to_model_cls[model_class.name()] = model_class
         return model_class
 
