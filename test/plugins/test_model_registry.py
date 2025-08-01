@@ -1,17 +1,3 @@
-# Copyright (c) 2024 PaddlePaddle Authors. All Rights Reserved.
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-
 import unittest
 
 from fastdeploy import ModelRegistry
@@ -24,7 +10,7 @@ class TestModelRegistryPlugins(unittest.TestCase):
         initial_archs = set(ModelRegistry.get_supported_archs())
         print("Supported architectures before loading plugins:", sorted(initial_archs))
 
-        # Load plugins (assumes fastdeploy-plugins is installed)
+        # Load plugins
         load_model_register_plugins()
 
         final_archs = set(ModelRegistry.get_supported_archs())
@@ -33,8 +19,12 @@ class TestModelRegistryPlugins(unittest.TestCase):
         added_archs = final_archs - initial_archs
         added_count = len(added_archs)
 
-        self.assertGreaterEqual(
-            added_count, 0, f"Expected at least 0 new architectures, but got {added_count}: {added_archs}"
+        # verify
+        self.assertEqual(
+            added_count,
+            1,
+            f"Expected exactly 1 new architecture to be registered by plugins, "
+            f"but {added_count} were added: {sorted(added_archs)}",
         )
 
 
