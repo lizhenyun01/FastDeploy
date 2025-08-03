@@ -70,6 +70,9 @@ class LLM:
         tokenizer: Optional[str] = None,
         **kwargs,
     ):
+        from fastdeploy.plugins.model_register import load_model_register_plugins
+
+        load_model_register_plugins()
         model = retrive_model_from_server(model, revision)
         engine_args = EngineArgs(
             model=model,

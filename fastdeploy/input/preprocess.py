@@ -1,7 +1,7 @@
 """
 # Copyright (c) 2025  PaddlePaddle Authors. All Rights Reserved.
 #
-# Licensed under the Apache License, Version 2.0 (the "License"
+# Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
 #
@@ -88,7 +88,9 @@ class InputPreprocessor:
                 )
         else:
             if not architectures.startswith("Ernie4_5_VLMoeForConditionalGeneration"):
-                raise ValueError(f"Model {self.model_name_or_path} is not a valid Ernie4_5_VLMoe model.")
+                from fastdeploy.input.mm_processor.mm_processor import MultiModalProcessor
+                
+                self.processor = MultiModalProcessor(self.model_name_or_path)
             else:
                 from fastdeploy.input.ernie_vl_processor import ErnieMoEVLProcessor
 
