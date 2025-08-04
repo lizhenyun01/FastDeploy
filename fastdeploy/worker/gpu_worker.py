@@ -39,8 +39,6 @@ try:
 except:
     from fastdeploy.worker.gpu_model_runner import GPUModelRunner as ModelRunner
 
-# ModelRunner = get_model_runner()
-
 
 class GpuWorker(WorkerBase):
     def __init__(
