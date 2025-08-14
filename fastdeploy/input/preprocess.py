@@ -96,15 +96,29 @@ class InputPreprocessor:
                 )
         else:
             if not ErnieArchitectures.contains_ernie_arch(architectures):
-                raise ValueError(f"Model {self.model_name_or_path} is not a valid Ernie4_5_VL model.")
+                raise ValueError(f"Model {self.model_name_or_path} is not a valid VL model.")
             else:
-                from fastdeploy.input.ernie_vl_processor import ErnieMoEVLProcessor
+                if "VL" in architectures:
+                    from fastdeploy.input.ernie_vl_processor import ErnieMoEVLProcessor
 
-                self.processor = ErnieMoEVLProcessor(
-                    model_name_or_path=self.model_name_or_path,
-                    limit_mm_per_prompt=self.limit_mm_per_prompt,
-                    mm_processor_kwargs=self.mm_processor_kwargs,
-                    reasoning_parser_obj=reasoning_parser_obj,
-                    tool_parser_obj=tool_parser_obj,
-                )
+                    self.processor = ErnieMoEVLProcessor(
+                        model_name_or_path=self.model_name_or_path,
+                        limit_mm_per_prompt=self.limit_mm_per_prompt,
+                        mm_processor_kwargs=self.mm_processor_kwargs,
+                        reasoning_parser_obj=reasoning_parser_obj,
+                    )
+                else:
+                    from fastdeploy.input.multimodal_processor import (
+                        MultiModalProcessor,
+                    )
+
+                    self.processor = MultiModalProcessor(self.model_name_or_path)
+                # from fastdeploy.input.ernie_vl_processor import ErnieMoEVLProcessor
+
+                # self.processor = ErnieMoEVLProcessor(
+                #     model_name_or_path=self.model_name_or_path,
+                #     limit_mm_per_prompt=self.limit_mm_per_prompt,
+                #     mm_processor_kwargs=self.mm_processor_kwargs,
+                #     reasoning_parser_obj=reasoning_parser_obj,
+                # )
         return self.processor

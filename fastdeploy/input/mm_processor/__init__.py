@@ -14,9 +14,11 @@
 # limitations under the License.
 """
 
+from .mm_data_process import MultiModalDataProcessor
 from .process import IDS_TYPE_FLAG, DataProcessor, fancy_print
 
 __all__ = [
+    "MultiModalDataProcessor",
     "DataProcessor",
     "fancy_print",
     "IDS_TYPE_FLAG",

@@ -104,8 +104,34 @@ def init_distributed_environment(seed: int = 20) -> Tuple[int, int]:
     return ranks, local_rank
 
 
+import os
+
+
+class MMConfig:
+    def __init__(self, model_name_or_path, config_json_file="config.json"):
+        self.quant_config = None
+        config_file = os.path.join(model_name_or_path, config_json_file)
+
+        with open(config_file, "r", encoding="utf-8") as f:
+            config_dict = json.load(f)
+            for key, value in config_dict.items():
+                try:
+                    setattr(self, key, value)
+                except Exception:
+                    continue
+
+
 def update_fd_config_for_mm(fd_config: FDConfig) -> None:
     if fd_config.model_config.enable_mm:
+        vocab_file_names = [
+            "tokenizer.model",
+            "spm.model",
+            "ernie_token_100k.model",
+        ]
+        for i in range(len(vocab_file_names)):
+            if os.path.exists(os.path.join(fd_config.model_config.model, vocab_file_names[i])):
+                ErnieBotTokenizer.resource_files_names["vocab_file"] = vocab_file_names[i]
+                break
         tokenizer = ErnieBotTokenizer.from_pretrained(
             fd_config.model_config.model,
             model_max_length=fd_config.parallel_config.max_model_len,
@@ -118,13 +144,8 @@ def update_fd_config_for_mm(fd_config: FDConfig) -> None:
 
         fd_config.model_config.tensor_parallel_degree = fd_config.parallel_config.tensor_parallel_size
         fd_config.model_config.tensor_parallel_rank = fd_config.parallel_config.tensor_parallel_rank
-        vision_config = fd_config.model_config.vision_config
-        vision_config.dtype = fd_config.model_config.dtype
-        # vision_config.tensor_parallel_degree = fd_config.parallel_config.tensor_parallel_size
-        # vision_config.tensor_parallel_rank = fd_config.parallel_config.tensor_parallel_rank
-        fd_config.model_config.im_patch_id = tokenizer.get_vocab()["<|IMAGE_PLACEHOLDER|>"]
-        fd_config.model_config.think_end_id = tokenizer.get_vocab()["</think>"]
-        fd_config.model_config.sequence_parallel = fd_config.parallel_config.sequence_parallel
+        mm_config = MMConfig(fd_config.model_config.model)
+        fd_config.mm_config = mm_config
 
 
 class PaddleDisWorkerProc:

@@ -22,9 +22,6 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Union
 
-import numpy as np
-import paddle
-
 from fastdeploy.engine.request import Request, RequestStatus, RequestType
 from fastdeploy.engine.resource_manager import ResourceManager
 from fastdeploy.utils import llm_logger
@@ -130,80 +127,35 @@ class ResourceManagerV1(ResourceManager):
     def _get_num_new_tokens(self, request, token_budget):
         num_new_tokens = request.need_prefill_tokens - request.num_computed_tokens
         num_new_tokens = min(num_new_tokens, token_budget)
-
-        if not self.config.enable_mm:
-            return num_new_tokens
-
-        inputs = request.multimodal_inputs
-        request.with_image = False
-        # Compatible with scenarios without images and videos.
-        if inputs["images"] is None:
-            return num_new_tokens
-
-        input_ids_lst = request.prompt_token_ids + request.output_token_ids
-        input_ids = paddle.to_tensor(input_ids_lst, dtype="int64")
-        input_ids = paddle.to_tensor(input_ids_lst, dtype="int64")
-        image_patch_id = inputs["image_patch_id"]
-
-        if request.multimodal_img_boundaries is None:
-            grid_thw = []
-            for one in inputs["grid_thw"]:
-                if one[0] == 1:
-                    grid_thw.append(one)
-                else:
-                    grid_thw.extend([[2, one[1], one[2]]] * (one[0] // 2))
-
-            grid_thw = paddle.to_tensor(grid_thw, dtype="int64")
-            from fastdeploy.model_executor.ops.gpu import get_img_boundaries
-
-            request.multimodal_img_boundaries = get_img_boundaries(
-                task_input_ids=input_ids, grid_thw=grid_thw, image_patch_id=image_patch_id
-            ).numpy()
-
-            grid_thw = grid_thw.numpy().reshape([-1, 3])
-            inputs["grid_thw"] = grid_thw
-
-        grid_thw = inputs["grid_thw"]
-        img_boundaries_idx = request.multimodal_img_boundaries[0]
-        img_num_per_boundary = request.multimodal_img_boundaries[1]
-        ori_prompt_len = img_boundaries_idx[-1].item()
         pre_end_idx = request.num_computed_tokens
         new_end_idx = pre_end_idx + num_new_tokens
-        if new_end_idx < ori_prompt_len and input_ids[new_end_idx - 1] == image_patch_id:
-            boundary_idx = np.searchsorted(img_boundaries_idx, new_end_idx, side="left").item()
-            if boundary_idx == len(img_boundaries_idx):
-                new_end_idx = ori_prompt_len
-            else:
-                new_end_idx = img_boundaries_idx[boundary_idx].item()
-        elif new_end_idx >= ori_prompt_len and paddle.sum(input_ids[pre_end_idx:new_end_idx] == image_patch_id):
-            new_end_idx = ori_prompt_len
+
+        inputs = request.multimodal_inputs
+        if (
+            inputs["image_feature_urls"] is None
+            and inputs["video_feature_urls"] is None
+            and inputs["audio_feature_urls"] is None
+        ):
+            return num_new_tokens
+
+        # start
+        start_patch_idx = inputs["patch_idx"][pre_end_idx]
+        start_patch_map = inputs["patch_map"][start_patch_idx]
+        request.image_start = start_patch_map["image_num"]
+        request.video_start = start_patch_map["video_num"]
+        request.audio_start = start_patch_map["audio_num"]
+
+        # end
+        end_patch_idx = inputs["patch_idx"][new_end_idx]
+        end_patch_map = inputs["patch_map"][end_patch_idx]
+        end_modal_id = end_patch_map["modal_id"]
+        if end_modal_id > 0:
+            new_end_idx = end_patch_map["end_idx"]  # 当前模态结束位置
         num_new_tokens = new_end_idx - pre_end_idx
 
-        image_mask = input_ids[pre_end_idx:new_end_idx] == image_patch_id
-        request.with_image = image_mask.any()
-        if request.with_image:
-            pre_boundary_idx = np.searchsorted(img_boundaries_idx, pre_end_idx, side="left").item()
-            if pre_boundary_idx == len(img_boundaries_idx):
-                request.num_image_start = img_num_per_boundary[-1]
-            else:
-                pre_boundary_idx = (
-                    pre_boundary_idx if pre_end_idx == img_boundaries_idx[pre_boundary_idx] else pre_boundary_idx - 1
-                )
-                request.num_image_start = img_num_per_boundary[pre_boundary_idx]
-
-            new_boundary_idx = np.searchsorted(img_boundaries_idx, new_end_idx, side="left").item()
-            if new_boundary_idx == len(img_boundaries_idx):
-                request.num_image_end = img_num_per_boundary[-1]
-            else:
-                new_boundary_idx = (
-                    new_boundary_idx if new_end_idx == img_boundaries_idx[new_boundary_idx] else new_boundary_idx - 1
-                )
-                request.num_image_end = img_num_per_boundary[new_boundary_idx]
-
-            request.image_type_ids_start = np.sum(grid_thw[: request.num_image_start, 0])
-            request.image_type_ids_end = np.sum(grid_thw[: request.num_image_end, 0])
-            request.image_start = np.sum(np.prod(grid_thw[: request.num_image_start], axis=1))
-            request.image_end = np.sum(np.prod(grid_thw[: request.num_image_end], axis=1))
+        request.image_end = end_patch_map["image_num"]
+        request.video_end = end_patch_map["video_num"]
+        request.audio_end = end_patch_map["audio_num"]
         return num_new_tokens
 
     def exist_prefill(self, scheduled_reqs):

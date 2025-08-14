@@ -59,6 +59,7 @@ from fastdeploy.utils import (
     retrive_model_from_server,
 )
 
+load_model_register_plugins()
 parser = FlexibleArgumentParser()
 parser.add_argument("--port", default=8000, type=int, help="port to the http server")
 parser.add_argument("--host", default="0.0.0.0", type=str, help="host to the http server")
@@ -461,7 +462,6 @@ def launch_controller_server():
 def main():
     """main函数"""
 
-    load_model_register_plugins()
     if load_engine() is None:
         return
 

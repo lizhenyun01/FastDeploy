@@ -87,7 +87,7 @@ class OpenAIServingChat:
         try:
             current_req_dict = request.to_dict_for_infer(request_id)
             current_req_dict["arrival_time"] = time.time()
-            prompt_token_ids = self.engine_client.format_and_add_data(current_req_dict)
+            prompt_token_ids = await self.engine_client.format_and_add_data(current_req_dict)
             text_after_process = current_req_dict.get("text_after_process")
             if isinstance(prompt_token_ids, np.ndarray):
                 prompt_token_ids = prompt_token_ids.tolist()
