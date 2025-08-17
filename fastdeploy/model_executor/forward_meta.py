@@ -102,6 +102,7 @@ class ForwardMeta:
     # Accumulated sequence length of key
     cu_seqlens_k: Optional[paddle.Tensor] = None
 
+    attn_mask_offsets: Optional[paddle.Tensor] = None
     # Pre-cache length
     pre_caches_length: int = 0
     # Block tables

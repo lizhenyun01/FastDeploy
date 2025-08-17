@@ -16,14 +16,21 @@
 """
 
 """ process.py """
+import json
 import os
+import subprocess
 from collections import defaultdict
+from datetime import timedelta
 from typing import Any, Dict, List, Union
 
 import numpy as np
 
 from fastdeploy.input.ernie_tokenizer import ErnieBotTokenizer
-from fastdeploy.input.tokenzier_client import AsyncTokenizerClient, ImageEncodeRequest
+from fastdeploy.input.tokenzier_client import (
+    AsyncTokenizerClient,
+    ImageEncodeRequest,
+    VideoEncodeRequest,
+)
 from fastdeploy.utils import data_processor_logger
 
 IDS_TYPE_FLAG = {"text": 0, "image": 1, "video": 2, "audio": 3}
@@ -58,6 +65,156 @@ def fancy_print(input_ids, tokenizer, image_patch_id=None):
         res += tokenizer.decode(text_ids)
         text_ids = []
     return res
+
+
+def get_duration(bos_url):
+    result = subprocess.run(
+        ["bcecmd", "bos", "gen_signed_url", bos_url], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+    )
+    url = str(result.stdout).strip()
+    cmd = ["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "format=duration", "-of", "json", url]
+    result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+
+    if result.returncode != 0:
+        raise RuntimeError(f"ffprobe 错误: {result.stderr}")
+    output = json.loads(result.stdout)
+    duration = int(float(output["format"]["duration"]))
+    return duration
+
+
+def get_uniform_frame_timestamps_usec(duration, frame_num):
+    """
+    获取均匀分布的时间戳
+    Args:
+        duration (int): 总时长
+        frame_num (int): 帧数
+    Returns:
+        list: 时间戳列表
+    """
+    assert duration > 0 and frame_num > 0
+    interval = duration / frame_num
+    timestamps = []
+    for i in range(frame_num):
+        time_in_sec = i * interval
+        td = timedelta(seconds=time_in_sec)
+        # 格式化为 HH:MM:SS.ffffff
+        total_seconds = td.total_seconds()
+        hours = int(total_seconds // 3600)
+        minutes = int((total_seconds % 3600) // 60)
+        seconds = int(total_seconds % 60)
+        microseconds = int((total_seconds - int(total_seconds)) * 1e2)
+        timestamps.append(f"{hours:02}:{minutes:02}:{seconds:02}.{microseconds:02}")
+    return timestamps
+
+
+def construct_3d_position_ids(
+    in_tokens,
+    pack_hw_list,
+    image_patch_id,
+    video_patch_id,
+    audio_patch_id,
+    eos_id,
+    eoi_id,
+    frame_lengths=None,
+    temporal_scale=2,
+):
+    """
+    construct_3d_position_ids
+    """
+    lm_labels = np.append(in_tokens[1:], 0)
+    is_video_patch = (lm_labels == image_patch_id).astype(np.int64)
+    is_eos_token = (in_tokens == eos_id).astype(np.int64)
+    is_eoi_token = (in_tokens == eoi_id).astype(np.int64)
+    assert np.sum(is_video_patch) == sum([np.sum(np.prod(hw_list, axis=-1)) for hw_list in pack_hw_list])
+
+    vid_idx = 0
+
+    if frame_lengths is None:
+        frame_width = len(pack_hw_list[vid_idx])
+    else:
+        frame_lengths = frame_lengths[0]
+        frame_width = len(pack_hw_list[vid_idx]) // frame_lengths[vid_idx]
+
+    t, h, w = -1, -1, -1
+    position_ids = []
+    frame_count = 0
+    # cur_frame_count = 0
+    cur_frame_idx = 1
+    hw_list = pack_hw_list[vid_idx]
+    frame_hw_list = pack_hw_list[vid_idx][:frame_width]
+    max_H, max_W = hw_list[-1]
+    para = temporal_scale
+
+    def point_via_count(c, hw_list):
+        cum_grade = np.cumsum([0] + np.prod(hw_list, axis=-1).tolist())
+        hit_scale_index = np.sum((c > cum_grade).astype(np.int64)) - 1
+        is_last_scale = hit_scale_index == (len(hw_list) - 1)
+        is_last_token = cum_grade[hit_scale_index + 1] == c
+        H, W = hw_list[hit_scale_index]
+        rest_i = c - cum_grade[hit_scale_index] - 1
+        h = rest_i // W
+        w = rest_i % W
+        return h, w, H, W, is_last_token, is_last_scale
+
+    for is_eos, is_eoi, is_vid in zip(is_eos_token.tolist(), is_eoi_token.tolist(), is_video_patch.tolist()):
+        if is_vid == 0:
+            t, h, w = t + 1, h + 1, w + 1
+            position_ids.append([t, h, w])
+        else:
+            frame_count += 1
+            s_h, s_w, s_H, s_W, is_last_token, is_last_scale = point_via_count(frame_count, frame_hw_list)
+
+            div_s_H, div_s_W = 1, 1
+
+            if s_H > 1:
+                div_s_H = s_H - 1
+            if s_W > 1:
+                div_s_W = s_W - 1
+
+            h_stride = (s_h + 0) / (div_s_H) * max_H - (max_H / 2)
+            w_stride = (s_w + 0) / (div_s_W) * max_W - (max_W / 2)
+
+            position_ids.append(
+                [
+                    t + (para * cur_frame_idx),
+                    t + (para * cur_frame_idx) + h_stride,
+                    t + (para * cur_frame_idx) + w_stride,
+                ]
+            )
+
+            if is_last_token and is_last_scale:
+                h, w = h + max_H, w + max_W
+                frame_count = 0
+                cur_length = 1 if frame_lengths is None else frame_lengths[vid_idx]
+                if cur_frame_idx == cur_length:
+                    t = t + para * cur_length
+                    h = t
+                    w = t
+                else:
+                    cur_frame_idx += 1
+
+        if is_eoi == 1:
+            vid_idx += 1
+            cur_frame_idx = 1
+
+            if len(pack_hw_list) <= vid_idx:
+                hw_list = None
+                max_H, max_W = None, None
+            else:
+                hw_list = pack_hw_list[vid_idx]
+                if frame_lengths is None:
+                    frame_width = len(pack_hw_list[vid_idx])
+                else:
+                    frame_width = len(pack_hw_list[vid_idx]) // frame_lengths[vid_idx]
+                frame_hw_list = pack_hw_list[vid_idx][:frame_width]
+                max_H, max_W = hw_list[-1]
+
+            frame_count = 0
+
+        if is_eos == 1 and False:
+            h, w = max(h, w) + 1, max(h, w) + 1
+
+    return np.array(position_ids).astype("float32").tolist()
 
 
 class MultiModalDataProcessor:
@@ -158,6 +315,42 @@ class MultiModalDataProcessor:
 
         return image_feature_url, image_grid_thw, token_num, patches_h, patches_w
 
+    async def video_encode(
+        self, req_id, video_url, version="v1", is_gen=False, max_frame=30, resolution=512, is_time_stamp=True
+    ):
+        # duration = get_duration(video_url)
+        duration = 5.0
+        frame = min(int(duration) * 2, max_frame)
+        request = VideoEncodeRequest(
+            version="v1",
+            req_id=req_id,
+            video_url=video_url,
+            is_gen=is_gen,
+            resolution=resolution,
+            start_ts=0.0,
+            end_ts=duration,
+            frames=frame,
+        )
+
+        result = await self.client.encode_video(request)
+        # result = {
+        #     "feature_url": "fake_url",
+        #     "feature_shape": [10,16,26,1536]
+        # }
+        video_feature_url, video_feature_shape = result["feature_url"], result["feature_shape"]
+        assert frame == video_feature_shape[0]
+        patches_h = video_feature_shape[1] // self.video_merge_size
+        patches_w = video_feature_shape[2] // self.video_merge_size
+        token_num = frame * (patches_h * patches_w + 1)
+        if is_time_stamp:
+            token_num += 11 * frame
+        for _ in range(frame):
+            video_grid_thw = [0, 1, 0]  # 第一个scale
+            video_grid_thw.extend([patches_w for _ in range(patches_h)])
+        timestamp_list = get_uniform_frame_timestamps_usec(duration, frame)
+
+        return video_feature_url, video_grid_thw, token_num, frame, timestamp_list, patches_h, patches_w
+
     def _build_token_type_mapping(self) -> Dict[Any, int]:
         mapping = defaultdict(lambda: IDS_TYPE_FLAG["text"])
         for token in (
@@ -177,6 +370,225 @@ class MultiModalDataProcessor:
     def eval(self) -> None:
         """Enable evaluation mode (doesn't produce labels)."""
         self.is_training = False
+
+    # def _add_special_token(self, token: Union[str, int], outputs: Dict) -> None:
+    #     token_id = token if isinstance(token, int) else self.tokenizer.convert_tokens_to_ids(token)
+    #     outputs["input_ids"].append(token_id)
+    #     outputs["token_type_ids"].append(self.token_type_mapping[token])
+    #     pos = int(outputs["cur_position"])
+    #     # outputs["position_ids"].append([pos] * 3)
+    #     outputs["cur_position"] += 1
+
+    def _add_text(self, tokens, outputs: Dict) -> None:
+        if isinstance(tokens, str):
+            tokens = self.tokenizer.encode(tokens, add_special_tokens=False)["input_ids"]
+        outputs["input_ids"].extend(tokens)
+        outputs["token_type_ids"].extend([IDS_TYPE_FLAG["text"]] * len(tokens))
+
+        # start = outputs["cur_position"]
+        token_num = int(len(tokens))
+        # for i in range(token_num):
+        #     outputs["position_ids"].append([int(start + i)] * 3)
+        outputs["cur_position"] += token_num
+        return token_num
+
+    async def _add_image(self, req_id, img_url, outputs: Dict) -> None:
+        image_feature_url, image_grid_thw, num_tokens, patches_h, patches_w = await self.image_encode(req_id, img_url)
+        outputs["input_ids"].extend([self.image_patch_id] * num_tokens)
+        outputs["token_type_ids"].extend([IDS_TYPE_FLAG["image"]] * num_tokens)
+
+        # pos_ids = self._compute_3d_positions(1, patches_h, patches_w, outputs["cur_position"])
+        # outputs["position_ids"].extend(pos_ids)
+        # outputs["cur_position"] = np.max(pos_ids) + 1
+        outputs["image_feature_urls"].append(image_feature_url)
+
+        outputs["image_grid_thws"].append(image_grid_thw)
+        outputs["image_type_ids"].append(0)
+        return num_tokens
+
+    async def _add_video(self, req_id, video_url, outputs: Dict) -> None:
+
+        video_feature_url, video_grid_thw, num_tokens_pre_frame, frame, timestamp_list, patches_h, patches_w = (
+            await self.video_encode(req_id, video_url)
+        )
+
+        video_tokens = []
+        num_tokens = frame * num_tokens_pre_frame
+        for i in range(frame):
+            time_stamp_token = self.tokenizer.encode(timestamp_list[i], add_special_tokens=False)["input_ids"]
+            outputs["input_ids"].extend([self.video_patch_id] * num_tokens_pre_frame)
+            num_tokens += len(time_stamp_token)
+        outputs["input_ids"].extend(video_tokens)
+        outputs["video_feature_urls"].append(video_feature_url)
+
+        outputs["video_grid_thws"].append(video_grid_thw)
+
+        # outputs["token_type_ids"].extend([IDS_TYPE_FLAG["video"]] * num_tokens)
+
+        # pos_ids = self._compute_3d_positions(1, patches_h, patches_w, outputs["cur_position"])
+        # outputs["position_ids"].extend(pos_ids)
+        # outputs["cur_position"] = np.max(pos_ids) + 1
+
+        # outputs["video_type_ids"].append(0)
+        return num_tokens
+
+    def _compute_3d_positions(self, outputs) -> List[List[int]]:
+        # Downsample time if needed
+        input_ids, image_grid_thws, video_grid_thws = (
+            outputs["input_ids"],
+            outputs["image_grid_thws"],
+            outputs["video_grid_thws"],
+        )
+
+        if len(image_grid_thws) > 0:
+            pack_scale_hw_list = []
+            for width_info in image_grid_thws:
+                scale_hw_list = []  # 不同scale height * width
+                for x in width_info:
+                    if x == 0:
+                        scale_hw_list.append([0, -1])  # [height, width]
+                    else:
+                        scale_hw_list[-1][0] += 1
+                        if scale_hw_list[-1][1] == -1:
+                            scale_hw_list[-1][1] = x  # 首次赋值
+                        else:
+                            assert scale_hw_list[-1][1] == x  # width 前后一致性检查
+            # print(f"[check] scale_hw_list: {scale_hw_list} | token_num: {np.sum(np.prod(scale_hw_list, axis=-1))}")
+            pack_scale_hw_list.append(scale_hw_list)
+            outputs["position_ids"] = construct_3d_position_ids(
+                np.array(input_ids),
+                pack_scale_hw_list,
+                self.image_patch_id,
+                self.video_patch_id,
+                self.audio_patch_id,
+                self.eos_token_id,
+                self.image_end_id,
+                frame_lengths=None,
+            )
+        elif len(video_grid_thws) > 0:
+            pack_scale_hw_list = []
+            for width_info in video_grid_thws:
+                scale_hw_list = []  # 不同scale height * width
+                for x in width_info:
+                    if x == 0:
+                        scale_hw_list.append([0, -1])  # [height, width]
+                    else:
+                        scale_hw_list[-1][0] += 1
+                        if scale_hw_list[-1][1] == -1:
+                            scale_hw_list[-1][1] = x  # 首次赋值
+                        else:
+                            assert scale_hw_list[-1][1] == x  # width 前后一致性检查
+            # print(f"[check] scale_hw_list: {scale_hw_list} | token_num: {np.sum(np.prod(scale_hw_list, axis=-1))}")
+            pack_scale_hw_list.append(scale_hw_list)
+            outputs["position_ids"] = construct_3d_position_ids(
+                np.array(input_ids),
+                pack_scale_hw_list,
+                self.image_patch_id,
+                self.video_patch_id,
+                self.audio_patch_id,
+                self.eos_token_id,
+                self.video_end_id,
+                frame_lengths=None,
+            )
+        else:
+            outputs["position_ids"] = np.repeat(np.arange(0, len(input_ids)), 3, axis=-1).astype("float32").tolist()
+
+    def _load_tokenizer(self):
+        """
+        load tokenizer
+
+        Returns:
+            tokenizer (AutoTokenizer)
+        """
+        vocab_file_names = [
+            "tokenizer.model",
+            "spm.model",
+            "ernie_token_100k.model",
+        ]
+        for i in range(len(vocab_file_names)):
+            if os.path.exists(os.path.join(self.model_name_or_path, vocab_file_names[i])):
+                ErnieBotTokenizer.resource_files_names["vocab_file"] = vocab_file_names[i]
+                break
+        self.tokenizer = ErnieBotTokenizer.from_pretrained(self.model_name_or_path)
+
+    def apply_chat_template(self, request):
+        """
+        Convert multi-turn messages into ID sequences.
+
+        Args:
+            messages: Either a request dict containing 'messages' field,
+                                or a list of message dicts directly
+
+        Returns:
+            List of token IDs as strings (converted from token objects)
+        """
+        if self.tokenizer.chat_template is None:
+            raise ValueError("This model does not support chat_template.")
+
+        prompt_token_str = (
+            self.tokenizer.apply_chat_template(
+                request,
+                tokenize=False,
+                add_generation_prompt=request.get("add_generation_prompt", True),
+            )
+            .replace("<|image@placeholder|>", "")
+            .replace("<|video@placeholder|>", "")
+            .replace("<|audio@placeholder|>", "")
+        )
+        # 手动添加eos_token
+        # prompt_token_str = "</s>" + prompt_token_str
+        tokens = self.tokenizer.tokenize(prompt_token_str)
+        token_ids = self.tokenizer.convert_tokens_to_ids(tokens)
+        data_processor_logger.info(
+            f"req_id:{request.get('request_id', ''), } tokens: {tokens}, token_ids: {token_ids}"
+        )
+        return token_ids
+
+    def _construct_mask_offset(self, input_ids, image_width_flatten):
+        input_ids = np.array(input_ids)
+        image_patch_num = np.sum(input_ids == self.image_patch_id)
+        image_width_num = sum([np.sum(image_width) for image_width in image_width_flatten])
+        assert int(image_patch_num) == int(image_width_num), (image_patch_num, image_width_num)
+        max_len = input_ids.size
+
+        # 提取每一张图片的上三角mask
+        pack_up_shift = []
+        for image_width in image_width_flatten:
+            up_shift = []
+            scale_tail_num = 0
+            for x in image_width:
+                if x == 0:
+                    if scale_tail_num > 0:
+                        up_shift.extend(list(range(scale_tail_num)))
+                        scale_tail_num = 0
+                else:
+                    scale_tail_num += x
+            if scale_tail_num > 0:
+                up_shift.extend(list(range(scale_tail_num)))
+
+            up_shift = np.array(up_shift, dtype=np.int32)
+            assert up_shift.size == np.sum(image_width)
+            pack_up_shift.append(up_shift)
+
+        # 找到每一张图片的开始位置（应当按照label序列计算，等同于按照输入序列计算并往左移一位）
+        pack_image_patch_start = np.where(input_ids == self.image_start_id)[0].tolist()
+        pack_image_patch_end = np.where(input_ids == self.image_end_id)[0].tolist()
+        assert len(pack_image_patch_start) == len(pack_image_patch_end) == len(pack_up_shift), (
+            len(pack_image_patch_start),
+            len(pack_image_patch_end),
+            len(pack_up_shift),
+        )
+
+        # 组装
+        attention_mask_offset = np.arange(max_len, dtype=np.int32)
+        for image_patch_start, image_patch_end, up_shift in zip(
+            pack_image_patch_start, pack_image_patch_end, pack_up_shift
+        ):
+            attention_mask_offset[image_patch_start : image_patch_start + up_shift.size] -= up_shift
+        mask = attention_mask_offset
+        # mask[2:1038] = 1037
+
+        return mask.tolist()
 
     async def request2ids(
         self, request: Dict[str, Any], tgts: List[str] = None
@@ -205,6 +617,7 @@ class MultiModalDataProcessor:
             "video_cnt": 0,
             "patch_idx": [],
             "patch_map": [],
+            "attention_mask_offset": [],
         }
 
         messages = request.get("messages")
@@ -241,7 +654,6 @@ class MultiModalDataProcessor:
             }
         )
         total_patch_idx += 1
-
         for i in range(len(prompt_token_ids)):
             if prompt_token_ids[i] in [
                 self.image_start_id,
@@ -320,115 +732,8 @@ class MultiModalDataProcessor:
                 }
             )
             total_patch_idx += 1
+        self._compute_3d_positions(outputs)
+        outputs["attention_mask_offset"] = self._construct_mask_offset(
+            outputs["input_ids"], outputs["image_grid_thws"]
+        )
         return outputs
-
-    def _add_special_token(self, token: Union[str, int], outputs: Dict) -> None:
-        token_id = token if isinstance(token, int) else self.tokenizer.convert_tokens_to_ids(token)
-        outputs["input_ids"].append(token_id)
-        outputs["token_type_ids"].append(self.token_type_mapping[token])
-        pos = int(outputs["cur_position"])
-        outputs["position_ids"].append([pos] * 3)
-        outputs["cur_position"] += 1
-
-    def _add_text(self, tokens, outputs: Dict) -> None:
-        if isinstance(tokens, str):
-            tokens = self.tokenizer.encode(tokens, add_special_tokens=False)["input_ids"]
-        outputs["input_ids"].extend(tokens)
-        outputs["token_type_ids"].extend([IDS_TYPE_FLAG["text"]] * len(tokens))
-
-        start = outputs["cur_position"]
-        token_num = int(len(tokens))
-        for i in range(token_num):
-            outputs["position_ids"].append([int(start + i)] * 3)
-        outputs["cur_position"] += token_num
-        return token_num
-
-    async def _add_image(self, req_id, img_url, outputs: Dict) -> None:
-        image_feature_url, image_grid_thw, num_tokens, patches_h, patches_w = await self.image_encode(req_id, img_url)
-        outputs["input_ids"].extend([self.image_patch_id] * num_tokens)
-        outputs["token_type_ids"].extend([IDS_TYPE_FLAG["image"]] * num_tokens)
-
-        pos_ids = self._compute_3d_positions(1, patches_h, patches_w, outputs["cur_position"])
-        outputs["position_ids"].extend(pos_ids)
-        outputs["cur_position"] = np.max(pos_ids) + 1
-        outputs["image_feature_urls"].append(image_feature_url)
-
-        outputs["image_grid_thws"].append(image_grid_thw)
-        outputs["image_type_ids"].append(0)
-        return num_tokens
-
-    def _add_video(self, request_id, video_url, outputs: Dict) -> None:
-        pass
-        # image_feature_url, image_grid_thw, num_tokens, patches_h, patches_w = await self.image_encode(req_id, img_url)
-        # outputs["input_ids"].extend([self.image_patch_id] * num_tokens)
-        # outputs["token_type_ids"].extend([IDS_TYPE_FLAG["image"]] * num_tokens)
-
-        # pos_ids = self._compute_3d_positions(1, patches_h, patches_w, outputs["cur_position"])
-        # outputs["position_ids"].extend(pos_ids)
-        # outputs["cur_position"] = np.max(pos_ids) + 1
-        # outputs["image_feature_urls"].append(image_feature_url)
-
-        # outputs["image_grid_thws"].append(image_grid_thw)
-        # outputs["image_type_ids"].append(0)
-
-    def _compute_3d_positions(self, t: int, h: int, w: int, start_idx: int) -> List[List[int]]:
-        # Downsample time if needed
-        t_eff = t // self.temporal_conv_size if t != 1 else 1
-        gh, gw = h // self.spatial_conv_size, w // self.spatial_conv_size
-        time_idx = np.repeat(np.arange(t_eff), gh * gw)
-        h_idx = np.tile(np.repeat(np.arange(gh), gw), t_eff)
-        w_idx = np.tile(np.arange(gw), t_eff * gh)
-
-        coords = list(zip(time_idx, h_idx, w_idx))
-        return [[int(start_idx + ti), int(start_idx + hi), int(start_idx + wi)] for ti, hi, wi in coords]
-
-    def _load_tokenizer(self):
-        """
-        load tokenizer
-
-        Returns:
-            tokenizer (AutoTokenizer)
-        """
-        vocab_file_names = [
-            "tokenizer.model",
-            "spm.model",
-            "ernie_token_100k.model",
-        ]
-        for i in range(len(vocab_file_names)):
-            if os.path.exists(os.path.join(self.model_name_or_path, vocab_file_names[i])):
-                ErnieBotTokenizer.resource_files_names["vocab_file"] = vocab_file_names[i]
-                break
-        self.tokenizer = ErnieBotTokenizer.from_pretrained(self.model_name_or_path)
-
-    def apply_chat_template(self, request):
-        """
-        Convert multi-turn messages into ID sequences.
-
-        Args:
-            messages: Either a request dict containing 'messages' field,
-                                or a list of message dicts directly
-
-        Returns:
-            List of token IDs as strings (converted from token objects)
-        """
-        if self.tokenizer.chat_template is None:
-            raise ValueError("This model does not support chat_template.")
-
-        prompt_token_str = (
-            self.tokenizer.apply_chat_template(
-                request,
-                tokenize=False,
-                add_generation_prompt=request.get("add_generation_prompt", True),
-            )
-            .replace("<|image@placeholder|>", "")
-            .replace("<|video@placeholder|>", "")
-            .replace("<|audio@placeholder|>", "")
-        )
-        # 手动添加eos_token
-        prompt_token_str = "</s>" + prompt_token_str
-        tokens = self.tokenizer.tokenize(prompt_token_str)
-        token_ids = self.tokenizer.convert_tokens_to_ids(tokens)
-        data_processor_logger.info(
-            f"req_id:{request.get('request_id', ''), } tokens: {tokens}, token_ids: {token_ids}"
-        )
-        return token_ids

@@ -106,19 +106,18 @@ def init_distributed_environment(seed: int = 20) -> Tuple[int, int]:
 
 import os
 
+# class MMConfig:
+#     def __init__(self, model_name_or_path, config_json_file="config.json"):
+#         self.quant_config = None
+#         config_file = os.path.join(model_name_or_path, config_json_file)
 
-class MMConfig:
-    def __init__(self, model_name_or_path, config_json_file="config.json"):
-        self.quant_config = None
-        config_file = os.path.join(model_name_or_path, config_json_file)
-
-        with open(config_file, "r", encoding="utf-8") as f:
-            config_dict = json.load(f)
-            for key, value in config_dict.items():
-                try:
-                    setattr(self, key, value)
-                except Exception:
-                    continue
+#         with open(config_file, "r", encoding="utf-8") as f:
+#             config_dict = json.load(f)
+#             for key, value in config_dict.items():
+#                 try:
+#                     setattr(self, key, value)
+#                 except Exception:
+#                     continue
 
 
 def update_fd_config_for_mm(fd_config: FDConfig) -> None:
@@ -144,8 +143,8 @@ def update_fd_config_for_mm(fd_config: FDConfig) -> None:
 
         fd_config.model_config.tensor_parallel_degree = fd_config.parallel_config.tensor_parallel_size
         fd_config.model_config.tensor_parallel_rank = fd_config.parallel_config.tensor_parallel_rank
-        mm_config = MMConfig(fd_config.model_config.model)
-        fd_config.mm_config = mm_config
+        # mm_config = MMConfig(fd_config.model_config.model)
+        # fd_config.mm_config = mm_config
 
 
 class PaddleDisWorkerProc:
