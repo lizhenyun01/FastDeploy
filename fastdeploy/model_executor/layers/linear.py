@@ -204,7 +204,7 @@ class LinearBase(nn.Layer):
 
         # bias
         if self.with_bias:
-            bias_tensor = paddle.to_tensor(get_tensor(state_dict.pop(self.bias_key)))
+            bias_tensor = get_tensor(state_dict.pop(self.bias_key))
             self.bias.set_value(bias_tensor)
 
     def forward_cuda(self, x: paddle.Tensor) -> paddle.Tensor:
@@ -688,6 +688,8 @@ class RowParallelLinear(LinearBase):
             skip_quant=skip_quant,
         )
 
+        if add_bias:
+            assert with_bias, "with_bias must be True when add_bias is True."
         assert self.quant_method is not None
         self.quant_method.create_weights(
             self,
@@ -720,6 +722,9 @@ class RowParallelLinear(LinearBase):
 
         if self.reduce_results and self.nranks > 1:
             tensor_model_parallel_all_reduce(out)
+
+        if self.add_bias:
+            out = paddle.add(out, self.bias)
 
         return out
 

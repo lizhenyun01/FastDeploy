@@ -31,6 +31,7 @@ class MultiModalProcessor(ErnieProcessor):
         limit_mm_per_prompt=None,
         mm_processor_kwargs=None,
         reasoning_parser_obj=None,
+        tool_parser_obj=None,
     ):
         data_processor_logger.info(f"model_name_or_path: {model_name_or_path}")
         tokenizer_path = model_name_or_path
@@ -48,6 +49,7 @@ class MultiModalProcessor(ErnieProcessor):
         self.audio_patch_id = self.data_processor.audio_patch_id
         self.spatial_conv_size = self.data_processor.spatial_conv_size
 
+        self.tool_parsers = dict()
         self.decode_status = dict()
         self._load_tokenizer()
         self.eos_token_ids = [self.tokenizer.eos_token_id]
@@ -55,6 +57,7 @@ class MultiModalProcessor(ErnieProcessor):
         self.pad_token_id = self.get_pad_id()
         self.limit_mm_per_prompt = self._parse_limits(limit_mm_per_prompt)
         self.reasoning_parser = None
+        self.tool_parser_obj = tool_parser_obj
         if reasoning_parser_obj:
             self.reasoning_parser = reasoning_parser_obj(self.tokenizer)
 
