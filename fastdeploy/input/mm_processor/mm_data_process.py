@@ -453,8 +453,8 @@ class MultiModalDataProcessor:
                             scale_hw_list[-1][1] = x  # 首次赋值
                         else:
                             assert scale_hw_list[-1][1] == x  # width 前后一致性检查
-            # print(f"[check] scale_hw_list: {scale_hw_list} | token_num: {np.sum(np.prod(scale_hw_list, axis=-1))}")
-            pack_scale_hw_list.append(scale_hw_list)
+                # print(f"[check] scale_hw_list: {scale_hw_list} | token_num: {np.sum(np.prod(scale_hw_list, axis=-1))}")
+                pack_scale_hw_list.append(scale_hw_list)
             outputs["position_ids"] = construct_3d_position_ids(
                 np.array(input_ids),
                 pack_scale_hw_list,
@@ -478,8 +478,8 @@ class MultiModalDataProcessor:
                             scale_hw_list[-1][1] = x  # 首次赋值
                         else:
                             assert scale_hw_list[-1][1] == x  # width 前后一致性检查
-            # print(f"[check] scale_hw_list: {scale_hw_list} | token_num: {np.sum(np.prod(scale_hw_list, axis=-1))}")
-            pack_scale_hw_list.append(scale_hw_list)
+                # print(f"[check] scale_hw_list: {scale_hw_list} | token_num: {np.sum(np.prod(scale_hw_list, axis=-1))}")
+                pack_scale_hw_list.append(scale_hw_list)
             outputs["position_ids"] = construct_3d_position_ids(
                 np.array(input_ids),
                 pack_scale_hw_list,
