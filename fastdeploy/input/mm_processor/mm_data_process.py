@@ -301,19 +301,13 @@ class MultiModalDataProcessor:
             "assistant": "Assistant: ",
         }
 
-    async def image_encode(self, req_id, image_url, version="v1", is_gen=False, resolution=2048):
+    async def get_feature_url_and_shape(self, req_id, image_url, version="v1", is_gen=False, resolution=2048):
         request = ImageEncodeRequest(
             version=version, req_id=req_id, is_gen=False, resolution=resolution, image_url=image_url
         )
         result = await self.client.encode_image(request)
         image_feature_url, image_feature_shape = result["feature_url"], result["feature_shape"]
-        patches_h = image_feature_shape[1] // self.image_merge_size
-        patches_w = image_feature_shape[2] // self.image_merge_size
-        token_num = patches_h * patches_w + 1
-        image_grid_thw = [0, 1, 0]  # 第一个scale
-        image_grid_thw.extend([patches_w for _ in range(patches_h)])
-
-        return image_feature_url, image_grid_thw, token_num, patches_h, patches_w
+        return image_feature_url, image_feature_shape
 
     async def video_encode(
         self, req_id, video_url, version="v1", is_gen=False, max_frame=30, resolution=512, is_time_stamp=True
@@ -392,8 +386,19 @@ class MultiModalDataProcessor:
         outputs["cur_position"] += token_num
         return token_num
 
-    async def _add_image(self, req_id, img_url, outputs: Dict) -> None:
-        image_feature_url, image_grid_thw, num_tokens, patches_h, patches_w = await self.image_encode(req_id, img_url)
+    async def _add_image(self, req_id, image_url, outputs: Dict, feature=None) -> None:
+        if feature is None:
+            image_feature_url, image_feature_shape = await self.get_feature_url_and_shape(req_id, image_url)
+        else:
+            image_feature_url = feature["feature_url"]
+            image_feature_shape = feature["feature_shape"]
+
+        patches_h = image_feature_shape[1] // self.image_merge_size
+        patches_w = image_feature_shape[2] // self.image_merge_size
+        num_tokens = patches_h * patches_w + 1
+        image_grid_thw = [0, 1, 0]  # 第一个scale
+        image_grid_thw.extend([patches_w for _ in range(patches_h)])
+
         outputs["input_ids"].extend([self.image_patch_id] * num_tokens)
         outputs["token_type_ids"].extend([IDS_TYPE_FLAG["image"]] * num_tokens)
 
@@ -680,11 +685,12 @@ class MultiModalDataProcessor:
                 start_index = i + 1
                 mm_message = mm_message_list[mm_message_index]
                 if mm_message["type"] == "image_url":
-                    img_url = mm_message.get("image_url")["url"]
-                    if img_url is None:
+                    image_url = mm_message.get("image_url")["url"]
+                    if image_url is None:
                         continue
+                    feature = mm_message.get("feature", None)
                     outputs["pic_cnt"] += 1
-                    token_num = await self._add_image(request_id, img_url, outputs)
+                    token_num = await self._add_image(request_id, image_url, outputs, feature)
                     image_idx += 1
                     total_token_idx += token_num
                     outputs["patch_idx"].extend([total_patch_idx for _ in range(token_num)])
