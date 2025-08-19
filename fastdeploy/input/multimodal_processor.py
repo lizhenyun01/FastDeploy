@@ -118,7 +118,8 @@ class MultiModalProcessor(ErnieProcessor):
     async def process_request(self, request, max_model_len=None, **kwargs):
         """process the input data"""
         task = request.to_dict()
-        task["enable_thinking"] = kwargs.get("enable_thinking", True)
+        # task["enable_thinking"] = kwargs.get("enable_thinking", True)
+        task["chat_template_kwargs"] = kwargs.get("chat_template_kwargs")
         await self.process_request_dict(task, max_model_len)
         request = Request.from_dict(task)
         request = self._apply_default_parameters(request)
@@ -225,6 +226,15 @@ class MultiModalProcessor(ErnieProcessor):
         elif request.get("messages"):
             messages = request["messages"]
             self._check_mm_limits(messages)
+            chat_template_kwargs = request.get("chat_template_kwargs")
+            if chat_template_kwargs:
+                if isinstance(chat_template_kwargs, dict):
+                    for k, v in chat_template_kwargs.items():
+                        if k not in request:
+                            request[k] = v
+                else:
+                    raise ValueError("Invalid input: chat_template_kwargs must be a dict")
+            request.setdefault("enable_thinking", True)
             outputs = await self.data_processor.request2ids(request)
         else:
             raise ValueError(f"Request must contain 'prompt', or 'messages': {request}")
