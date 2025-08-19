@@ -586,11 +586,9 @@ class MultiModalDataProcessor:
             pack_image_patch_start, pack_image_patch_end, pack_up_shift
         ):
             attention_mask_offset[image_patch_start : image_patch_start + up_shift.size] -= up_shift
-        mask = attention_mask_offset
-        # mask[20:1056] = 1055
-        mask[20:182] = 181
+            attention_mask_offset[image_patch_start + 1 : image_patch_end] = image_patch_end - 1
 
-        return mask.tolist()
+        return attention_mask_offset.tolist()
 
     async def request2ids(
         self, request: Dict[str, Any], tgts: List[str] = None
