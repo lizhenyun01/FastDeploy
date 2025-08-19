@@ -536,7 +536,8 @@ class MultiModalDataProcessor:
             .replace("<|audio@placeholder|>", "")
         )
         # 手动添加eos_token
-        # prompt_token_str = "</s>" + prompt_token_str
+        # prompt_token_str = "</s><|im_start|>system\n<global_setting>\nthink_mode=False\n</global_setting><|im_end|>\n\n<|im_start|>user\n<image_start><image_end>哪个银行？<|im_end|>\n\n<|im_start|>assistant\n<think></think>"
+        prompt_token_str = "</s><|im_start|>system\n<global_setting>\nthink_mode=False\n</global_setting><|im_end|>\n\n<|im_start|>user\n<image_start><image_end>Baxter Company has a relevant range of production between 15,000 and 30,000 units. The following cost data represents average variable costs per unit for 25,000 units of production. If 30,000 units are produced, what are the per unit manufacturing overhead costs incurred?\nOptions:\n(A) $6\n(B) $7\n(C) $8\n(D) $9<|im_end|>\n\n<|im_start|>assistant\n<think></think>"
         tokens = self.tokenizer.tokenize(prompt_token_str)
         token_ids = self.tokenizer.convert_tokens_to_ids(tokens)
         data_processor_logger.info(
@@ -585,10 +586,9 @@ class MultiModalDataProcessor:
             pack_image_patch_start, pack_image_patch_end, pack_up_shift
         ):
             attention_mask_offset[image_patch_start : image_patch_start + up_shift.size] -= up_shift
-        mask = attention_mask_offset
-        # mask[2:1038] = 1037
+            attention_mask_offset[image_patch_start + 1 : image_patch_end] = image_patch_end - 1
 
-        return mask.tolist()
+        return attention_mask_offset.tolist()
 
     async def request2ids(
         self, request: Dict[str, Any], tgts: List[str] = None
