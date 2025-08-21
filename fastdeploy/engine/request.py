@@ -115,6 +115,8 @@ class Request:
         self.block_tables = []
         self.output_token_ids = []
         self.num_computed_tokens = 0
+        self.prefill_start_index = 0
+        self.prefill_end_index = self.prompt_token_ids_len
         # status
         self.status = RequestStatus.WAITING
         self.task_type = RequestType.PREFILL

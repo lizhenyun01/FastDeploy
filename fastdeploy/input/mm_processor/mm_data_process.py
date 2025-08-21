@@ -110,30 +110,28 @@ def get_uniform_frame_timestamps_usec(duration, frame_num):
 def construct_3d_position_ids(
     in_tokens,
     pack_hw_list,
-    image_patch_id,
-    video_patch_id,
-    audio_patch_id,
+    patch_id,
     eos_id,
     eoi_id,
     frame_lengths=None,
+    is_video=False,
     temporal_scale=2,
 ):
     """
     construct_3d_position_ids
     """
     lm_labels = np.append(in_tokens[1:], 0)
-    is_video_patch = (lm_labels == image_patch_id).astype(np.int64)
+    is_vision_patch = (lm_labels == patch_id).astype(np.int64)
     is_eos_token = (in_tokens == eos_id).astype(np.int64)
     is_eoi_token = (in_tokens == eoi_id).astype(np.int64)
-    assert np.sum(is_video_patch) == sum([np.sum(np.prod(hw_list, axis=-1)) for hw_list in pack_hw_list])
+    assert np.sum(is_vision_patch) == sum([np.sum(np.prod(hw_list, axis=-1)) for hw_list in pack_hw_list])
 
     vid_idx = 0
 
-    if frame_lengths is None:
-        frame_width = len(pack_hw_list[vid_idx])
-    else:
-        frame_lengths = frame_lengths[0]
+    if is_video:
         frame_width = len(pack_hw_list[vid_idx]) // frame_lengths[vid_idx]
+    else:
+        frame_width = len(pack_hw_list[vid_idx])
 
     t, h, w = -1, -1, -1
     position_ids = []
@@ -156,7 +154,7 @@ def construct_3d_position_ids(
         w = rest_i % W
         return h, w, H, W, is_last_token, is_last_scale
 
-    for is_eos, is_eoi, is_vid in zip(is_eos_token.tolist(), is_eoi_token.tolist(), is_video_patch.tolist()):
+    for is_eos, is_eoi, is_vid in zip(is_eos_token.tolist(), is_eoi_token.tolist(), is_vision_patch.tolist()):
         if is_vid == 0:
             t, h, w = t + 1, h + 1, w + 1
             position_ids.append([t, h, w])
@@ -185,7 +183,7 @@ def construct_3d_position_ids(
             if is_last_token and is_last_scale:
                 h, w = h + max_H, w + max_W
                 frame_count = 0
-                cur_length = 1 if frame_lengths is None else frame_lengths[vid_idx]
+                cur_length = frame_lengths[vid_idx] if is_video else 1
                 if cur_frame_idx == cur_length:
                     t = t + para * cur_length
                     h = t
@@ -202,17 +200,17 @@ def construct_3d_position_ids(
                 max_H, max_W = None, None
             else:
                 hw_list = pack_hw_list[vid_idx]
-                if frame_lengths is None:
-                    frame_width = len(pack_hw_list[vid_idx])
-                else:
+                if is_video:
                     frame_width = len(pack_hw_list[vid_idx]) // frame_lengths[vid_idx]
+                else:
+                    frame_width = len(pack_hw_list[vid_idx])
                 frame_hw_list = pack_hw_list[vid_idx][:frame_width]
                 max_H, max_W = hw_list[-1]
 
             frame_count = 0
 
-        if is_eos == 1 and False:
-            h, w = max(h, w) + 1, max(h, w) + 1
+        # if is_eos == 1 and False:
+        #     h, w = max(h, w) + 1, max(h, w) + 1
 
     return np.array(position_ids).astype("float32").tolist()
 
@@ -239,11 +237,10 @@ class MultiModalDataProcessor:
     def __init__(
         self,
         tokenizer_name: str,
-        spatial_conv_size: int = 2,
-        temporal_conv_size: int = 2,
         image_merge_size: int = 2,
         video_merge_size: int = 2,
         audio_code_depth: int = 32,
+        add_timestamp: bool = True,
         **kwargs,
     ) -> None:
         # Tokenizer and image preprocessor
@@ -253,10 +250,6 @@ class MultiModalDataProcessor:
 
         base_url = "http://10.11.155.135:8201"
         self.client = AsyncTokenizerClient(base_url=base_url)
-
-        # Convolution sizes for patch aggregation
-        self.spatial_conv_size = spatial_conv_size
-        self.temporal_conv_size = temporal_conv_size
 
         # Pixel constraints
         self.image_merge_size = image_merge_size
@@ -300,6 +293,7 @@ class MultiModalDataProcessor:
             "bot": "Assistant: ",
             "assistant": "Assistant: ",
         }
+        self.add_timestamp = add_timestamp
 
     async def get_feature_url_and_shape(self, req_id, image_url, version="v1", is_gen=False, resolution=2048):
         request = ImageEncodeRequest(
@@ -309,19 +303,17 @@ class MultiModalDataProcessor:
         image_feature_url, image_feature_shape = result["feature_url"], result["feature_shape"]
         return image_feature_url, image_feature_shape
 
-    async def video_encode(
-        self, req_id, video_url, version="v1", is_gen=False, max_frame=30, resolution=512, is_time_stamp=True
-    ):
+    async def video_encode(self, req_id, video_url, version="v1", is_gen=False, max_frame=30, resolution=512):
         # duration = get_duration(video_url)
-        duration = 5.0
-        frame = min(int(duration) * 2, max_frame)
+        duration = 5
+        frame = 10
         request = VideoEncodeRequest(
             version="v1",
             req_id=req_id,
             video_url=video_url,
             is_gen=is_gen,
             resolution=resolution,
-            start_ts=0.0,
+            start_ts=0,
             end_ts=duration,
             frames=frame,
         )
@@ -332,18 +324,10 @@ class MultiModalDataProcessor:
         #     "feature_shape": [10,16,26,1536]
         # }
         video_feature_url, video_feature_shape = result["feature_url"], result["feature_shape"]
-        assert frame == video_feature_shape[0]
-        patches_h = video_feature_shape[1] // self.video_merge_size
-        patches_w = video_feature_shape[2] // self.video_merge_size
-        token_num = frame * (patches_h * patches_w + 1)
-        if is_time_stamp:
-            token_num += 11 * frame
-        for _ in range(frame):
-            video_grid_thw = [0, 1, 0]  # 第一个scale
-            video_grid_thw.extend([patches_w for _ in range(patches_h)])
-        timestamp_list = get_uniform_frame_timestamps_usec(duration, frame)
+        print(f"feature_shape:{video_feature_shape}")
+        print(f"video_feature_url:{video_feature_url}")
 
-        return video_feature_url, video_grid_thw, token_num, frame, timestamp_list, patches_h, patches_w
+        return video_feature_url, video_feature_shape, duration
 
     def _build_token_type_mapping(self) -> Dict[Any, int]:
         mapping = defaultdict(lambda: IDS_TYPE_FLAG["text"])
@@ -401,40 +385,45 @@ class MultiModalDataProcessor:
 
         outputs["input_ids"].extend([self.image_patch_id] * num_tokens)
         outputs["token_type_ids"].extend([IDS_TYPE_FLAG["image"]] * num_tokens)
-
-        # pos_ids = self._compute_3d_positions(1, patches_h, patches_w, outputs["cur_position"])
-        # outputs["position_ids"].extend(pos_ids)
-        # outputs["cur_position"] = np.max(pos_ids) + 1
         outputs["image_feature_urls"].append(image_feature_url)
 
         outputs["image_grid_thws"].append(image_grid_thw)
         outputs["image_type_ids"].append(0)
         return num_tokens
 
-    async def _add_video(self, req_id, video_url, outputs: Dict) -> None:
+    async def _add_video(self, req_id, video_url, outputs: Dict, is_time_stamp=True) -> None:
 
-        video_feature_url, video_grid_thw, num_tokens_pre_frame, frame, timestamp_list, patches_h, patches_w = (
-            await self.video_encode(req_id, video_url)
-        )
+        video_feature_url, video_feature_shape, duration = await self.video_encode(req_id, video_url)
 
-        video_tokens = []
-        num_tokens = frame * num_tokens_pre_frame
+        frame = video_feature_shape[0]
+        patches_h = video_feature_shape[1] // self.video_merge_size
+        patches_w = video_feature_shape[2] // self.video_merge_size
+        num_tokens_pre_frame = patches_h * patches_w + 1
+
+        if is_time_stamp:
+            timestamp_list = get_uniform_frame_timestamps_usec(duration, frame)
+        else:
+            timestamp_list = []
+
+        video_grid_thw = []
+        num_tokens = 0
         for i in range(frame):
-            time_stamp_token = self.tokenizer.encode(timestamp_list[i], add_special_tokens=False)["input_ids"]
+            if is_time_stamp:
+                time_stamp_token = self.tokenizer.encode(timestamp_list[i], add_special_tokens=False)["input_ids"]
+                outputs["input_ids"].extend(time_stamp_token)
+                num_tokens += len(time_stamp_token)
+
             outputs["input_ids"].extend([self.video_patch_id] * num_tokens_pre_frame)
-            num_tokens += len(time_stamp_token)
-        outputs["input_ids"].extend(video_tokens)
+            num_tokens += num_tokens_pre_frame
+
+            video_grid_thw.extend([0, 1, 0])
+            video_grid_thw.extend([patches_w for _ in range(patches_h)])
+
         outputs["video_feature_urls"].append(video_feature_url)
 
         outputs["video_grid_thws"].append(video_grid_thw)
+        outputs["video_frame_lengths"].append(frame)
 
-        # outputs["token_type_ids"].extend([IDS_TYPE_FLAG["video"]] * num_tokens)
-
-        # pos_ids = self._compute_3d_positions(1, patches_h, patches_w, outputs["cur_position"])
-        # outputs["position_ids"].extend(pos_ids)
-        # outputs["cur_position"] = np.max(pos_ids) + 1
-
-        # outputs["video_type_ids"].append(0)
         return num_tokens
 
     def _compute_3d_positions(self, outputs) -> List[List[int]]:
@@ -461,14 +450,7 @@ class MultiModalDataProcessor:
                 # print(f"[check] scale_hw_list: {scale_hw_list} | token_num: {np.sum(np.prod(scale_hw_list, axis=-1))}")
                 pack_scale_hw_list.append(scale_hw_list)
             outputs["position_ids"] = construct_3d_position_ids(
-                np.array(input_ids),
-                pack_scale_hw_list,
-                self.image_patch_id,
-                self.video_patch_id,
-                self.audio_patch_id,
-                self.eos_token_id,
-                self.image_end_id,
-                frame_lengths=None,
+                np.array(input_ids), pack_scale_hw_list, self.image_patch_id, self.eos_token_id, self.image_end_id
             )
         elif len(video_grid_thws) > 0:
             pack_scale_hw_list = []
@@ -488,12 +470,11 @@ class MultiModalDataProcessor:
             outputs["position_ids"] = construct_3d_position_ids(
                 np.array(input_ids),
                 pack_scale_hw_list,
-                self.image_patch_id,
                 self.video_patch_id,
-                self.audio_patch_id,
                 self.eos_token_id,
                 self.video_end_id,
-                frame_lengths=None,
+                frame_lengths=outputs["video_frame_lengths"],
+                is_video=True,
             )
         else:
             outputs["position_ids"] = np.repeat(np.arange(0, len(input_ids)), 3, axis=-1).astype("float32").tolist()
@@ -546,12 +527,13 @@ class MultiModalDataProcessor:
         # prompt_token_str = "</s><|im_start|>system\n<global_setting>\nthink_mode=False\n</global_setting><|im_end|>\n\n<|im_start|>user\n<image_start><image_end>Baxter Company has a relevant range of production between 15,000 and 30,000 units. The following cost data represents average variable costs per unit for 25,000 units of production. If 30,000 units are produced, what are the per unit manufacturing overhead costs incurred?\nOptions:\n(A) $6\n(B) $7\n(C) $8\n(D) $9<|im_end|>\n\n<|im_start|>assistant\n<think></think>"
         tokens = self.tokenizer.tokenize(prompt_token_str)
         token_ids = self.tokenizer.convert_tokens_to_ids(tokens)
+
         data_processor_logger.info(
             f"req_id:{request.get('request_id', ''), } tokens: {tokens}, token_ids: {token_ids}"
         )
         return token_ids
 
-    def _construct_mask_offset(self, input_ids, image_width_flatten):
+    def _construct_image_mask_offset(self, input_ids, image_width_flatten):
         input_ids = np.array(input_ids)
         image_patch_num = np.sum(input_ids == self.image_patch_id)
         image_width_num = sum([np.sum(image_width) for image_width in image_width_flatten])
@@ -596,6 +578,72 @@ class MultiModalDataProcessor:
 
         return attention_mask_offset.tolist()
 
+    def _construct_video_mask_offset(self, input_ids, video_width_flatten, frames=None):
+        input_ids = np.array(input_ids)
+        video_patch_num = np.sum((input_ids == self.video_patch_id))
+        video_width_num = sum([np.sum(video_width) for video_width in video_width_flatten])
+        assert int(video_patch_num) == int(video_width_num), (video_patch_num, video_width_num)
+        max_len = input_ids.size
+
+        # 提取每一张图片的上三角mask
+        pack_up_shift = []
+        for i, video_width in enumerate(video_width_flatten):
+            frame = frames[0]
+            image_patch_num = sum(video_width[: len(video_width) // frame])
+            up_shift = []
+            scale_tail_num = 0
+            skip_first_token_timestamp = True
+            for x in video_width:  # [0,1,0,9,9,9,9,0,1,0,9,9,99]
+                if x == 0:
+                    if scale_tail_num > 0:
+                        sub_tail_num_list = list(range(scale_tail_num))
+                        sub_tail_num_list = [x - image_patch_num for x in sub_tail_num_list]
+                        if self.add_timestamp:
+                            if skip_first_token_timestamp:
+                                up_shift.extend(list(range(scale_tail_num)))
+                            else:
+                                up_shift.extend([0] * 11 + sub_tail_num_list)
+                        else:
+                            up_shift.extend(sub_tail_num_list)
+                        scale_tail_num = 0
+
+                else:
+                    if self.add_timestamp:
+                        if x == 1:
+                            skip_first_token_timestamp = True
+                        else:
+                            skip_first_token_timestamp = False
+                    scale_tail_num += x
+            if scale_tail_num > 0:
+                sub_tail_num_list = list(range(scale_tail_num))
+                sub_tail_num_list = [x - image_patch_num for x in sub_tail_num_list]
+                if self.add_timestamp:
+                    up_shift.extend([0] * 11 + sub_tail_num_list)  # [range(1), range(16*9)] * frames
+                else:
+                    up_shift.extend(sub_tail_num_list)
+            # log.debug(f"up_shift is {up_shift}")
+            up_shift = np.array(up_shift, dtype=np.int32)
+            if not self.add_timestamp:
+                assert up_shift.size == np.sum(video_width)
+            pack_up_shift.append(up_shift)
+
+        # 找到每一张图片的开始位置（应当按照label序列计算，等同于按照输入序列计算并往左移一位）
+        pack_video_patch_start = np.where(input_ids == self.video_start_id)[0].tolist()
+        pack_video_patch_end = np.where(input_ids == self.video_end_id)[0].tolist()
+        assert len(pack_video_patch_start) == len(pack_video_patch_end) == len(pack_up_shift), (
+            len(pack_video_patch_start),
+            len(pack_video_patch_end),
+            len(pack_up_shift),
+        )
+        # 组装
+        attention_mask_offset = np.arange(max_len, dtype=np.int32)
+        for video_patch_start, video_patch_end, up_shift in zip(
+            pack_video_patch_start, pack_video_patch_end, pack_up_shift
+        ):
+            attention_mask_offset[video_patch_start : video_patch_start + up_shift.size] -= up_shift
+            # attention_mask_offset[video_patch_start + 1 : video_patch_end] -= video_patch_end - 1
+        return attention_mask_offset.tolist()
+
     async def request2ids(
         self, request: Dict[str, Any], tgts: List[str] = None
     ) -> Dict[str, Union[np.ndarray, List[np.ndarray], None]]:
@@ -613,6 +661,7 @@ class MultiModalDataProcessor:
             "image_type_ids": [],
             "video_feature_urls": [],
             "video_grid_thws": [],
+            "video_frame_lengths": [],
             "video_type_ids": [],
             "audio_feature_urls": [],
             "audio_grid_thws": [],
@@ -739,8 +788,18 @@ class MultiModalDataProcessor:
                 }
             )
             total_patch_idx += 1
+
         self._compute_3d_positions(outputs)
-        outputs["attention_mask_offset"] = self._construct_mask_offset(
-            outputs["input_ids"], outputs["image_grid_thws"]
+        input_ids, image_grid_thws, video_grid_thws = (
+            outputs["input_ids"],
+            outputs["image_grid_thws"],
+            outputs["video_grid_thws"],
         )
+        if len(image_grid_thws) > 0:
+            outputs["attention_mask_offset"] = self._construct_image_mask_offset(input_ids, image_grid_thws)
+        elif len(video_grid_thws) > 0:
+
+            outputs["attention_mask_offset"] = self._construct_video_mask_offset(
+                input_ids, video_grid_thws, outputs["video_frame_lengths"]
+            )
         return outputs
