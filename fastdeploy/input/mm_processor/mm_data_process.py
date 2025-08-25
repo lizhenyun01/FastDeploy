@@ -295,7 +295,7 @@ class MultiModalDataProcessor:
         }
         self.add_timestamp = add_timestamp
 
-    async def get_feature_url_and_shape(self, req_id, image_url, version="v1", is_gen=False, resolution=2048):
+    async def get_image_feature_url_and_shape(self, req_id, image_url, version="v1", is_gen=False, resolution=2048):
         request = ImageEncodeRequest(
             version=version, req_id=req_id, is_gen=False, resolution=resolution, image_url=image_url
         )
@@ -303,7 +303,9 @@ class MultiModalDataProcessor:
         image_feature_url, image_feature_shape = result["feature_url"], result["feature_shape"]
         return image_feature_url, image_feature_shape
 
-    async def video_encode(self, req_id, video_url, version="v1", is_gen=False, max_frame=30, resolution=512):
+    async def get_video_feature_url_and_shape(
+        self, req_id, video_url, version="v1", is_gen=False, max_frame=30, resolution=512
+    ):
         # duration = get_duration(video_url)
         duration = 5
         frame = 10
@@ -324,8 +326,8 @@ class MultiModalDataProcessor:
         #     "feature_shape": [10,16,26,1536]
         # }
         video_feature_url, video_feature_shape = result["feature_url"], result["feature_shape"]
-        print(f"feature_shape:{video_feature_shape}")
-        print(f"video_feature_url:{video_feature_url}")
+        # print(f"feature_shape:{video_feature_shape}")
+        # print(f"video_feature_url:{video_feature_url}")
 
         return video_feature_url, video_feature_shape, duration
 
@@ -372,7 +374,7 @@ class MultiModalDataProcessor:
 
     async def _add_image(self, req_id, image_url, outputs: Dict, feature=None) -> None:
         if feature is None:
-            image_feature_url, image_feature_shape = await self.get_feature_url_and_shape(req_id, image_url)
+            image_feature_url, image_feature_shape = await self.get_image_feature_url_and_shape(req_id, image_url)
         else:
             image_feature_url = feature["feature_url"]
             image_feature_shape = feature["feature_shape"]
@@ -391,10 +393,15 @@ class MultiModalDataProcessor:
         outputs["image_type_ids"].append(0)
         return num_tokens
 
-    async def _add_video(self, req_id, video_url, outputs: Dict, is_time_stamp=True) -> None:
-
-        video_feature_url, video_feature_shape, duration = await self.video_encode(req_id, video_url)
-
+    async def _add_video(self, req_id, video_url, outputs: Dict, feature=None, is_time_stamp=True) -> None:
+        if feature is None:
+            video_feature_url, video_feature_shape, duration = await self.get_video_feature_url_and_shape(
+                req_id, video_url
+            )
+        else:
+            video_feature_url = feature["feature_url"]
+            video_feature_shape = feature["feature_shape"]
+            duration = 5
         frame = video_feature_shape[0]
         patches_h = video_feature_shape[1] // self.video_merge_size
         patches_w = video_feature_shape[2] // self.video_merge_size
@@ -757,8 +764,9 @@ class MultiModalDataProcessor:
                     video_url = mm_message.get("video_url")["url"]
                     if video_url is None:
                         continue
+                    feature = mm_message.get("feature", None)
                     outputs["video_cnt"] += 1
-                    token_num = await self._add_video(request_id, video_url, outputs)
+                    token_num = await self._add_video(request_id, video_url, outputs, feature)
                     video_idx += 1
                     total_token_idx += token_num
                     outputs["patch_idx"].extend([total_patch_idx for _ in range(token_num)])

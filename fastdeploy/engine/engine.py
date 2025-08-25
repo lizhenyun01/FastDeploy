@@ -352,6 +352,8 @@ class LLMEngine:
             )
             # Fetch requests and add them to the scheduling queue
             for task in tasks:
+                if task.sampling_params.bad_words is not None:
+                    task.sampling_params.update_from_tokenizer(self.data_processor.tokenizer)
                 self.resource_manager.add_request(task)
             is_fetching = False
 

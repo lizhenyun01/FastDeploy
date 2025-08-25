@@ -48,6 +48,9 @@ class MultiModalProcessor(ErnieProcessor):
         self.video_patch_id = self.data_processor.video_patch_id
         self.audio_patch_id = self.data_processor.audio_patch_id
 
+        self.decode_status = dict()
+        self.tool_parsers = dict()
+
         self._load_tokenizer()
         self.eos_token_ids = [self.tokenizer.eos_token_id]
         self.eos_token_id_len = len(self.eos_token_ids)
