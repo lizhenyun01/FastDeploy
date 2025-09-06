@@ -116,6 +116,7 @@ class ParallelLMHead(nn.Layer):
 
                 if self.nranks > 1:
                     set_weight_attrs(self.linear.weight, {"output_dim": False})
+        self.linear.weight.rl_tp_degree = fd_config.parallel_config.tensor_parallel_size
 
     def load_state_dict(self, state_dict: Dict[str, paddle.Tensor | np.ndarray]):
         """
