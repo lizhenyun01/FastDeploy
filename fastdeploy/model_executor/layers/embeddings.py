@@ -77,6 +77,7 @@ class VocabParallelEmbedding(nn.Layer):
             )
             if self.world_size > 1:
                 set_weight_attrs(self.embeddings.weight, {"output_dim": False})
+            self.embeddings.weight.rl_tp_degree = fd_config.parallel_config.tensor_parallel_size
         else:
             # column cut embedding
             self.embeddings = nn.Embedding(

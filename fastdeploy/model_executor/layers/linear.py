@@ -243,6 +243,9 @@ class LinearBase(nn.Layer):
 
         return linear_out
 
+    def set_rl_tp_depree(self, tp_degree):
+        self.weight.rl_tp_degree = tp_degree
+
 
 class ReplicatedLinear(LinearBase):
     """
@@ -360,6 +363,9 @@ class ColumnParallelLinear(LinearBase):
                 # col parallel
                 _set_var_distributed(self.bias, split_axis=1)
                 set_weight_attrs(self.bias, {"output_dim": True})
+
+        # set_rl_tp_depree
+        self.set_rl_tp_depree(fd_config.parallel_config.tensor_parallel_size)
 
 
 class MergedColumnParallelLinear(ColumnParallelLinear):
@@ -754,6 +760,9 @@ class RowParallelLinear(LinearBase):
                 )
 
         self.reduce_results = reduce_results
+
+        # set_rl_tp_depree
+        self.set_rl_tp_depree(fd_config.parallel_config.tensor_parallel_size)
 
     def forward_cuda(self, x: paddle.Tensor) -> paddle.Tensor:
         if self.fd_config.quant_config:
