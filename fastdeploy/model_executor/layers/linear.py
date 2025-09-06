@@ -356,6 +356,7 @@ class ColumnParallelLinear(LinearBase):
         )
 
         if self.nranks > 0:
+            _set_var_distributed(self.weight, split_axis=-1)
             if self.with_bias:
                 # col parallel
                 _set_var_distributed(self.bias, split_axis=0)
@@ -747,6 +748,7 @@ class RowParallelLinear(LinearBase):
             model_format=fd_config.model_config.model_format,
         )
         if self.nranks > 0:
+            _set_var_distributed(self.weight, split_axis=0)
             if self.with_bias:
                 # col parallel
                 _set_var_distributed(self.bias, split_axis=0)
