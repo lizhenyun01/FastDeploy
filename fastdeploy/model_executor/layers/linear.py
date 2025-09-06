@@ -358,7 +358,7 @@ class ColumnParallelLinear(LinearBase):
         if self.nranks > 0:
             if self.with_bias:
                 # col parallel
-                _set_var_distributed(self.bias, split_axis=1)
+                _set_var_distributed(self.bias, split_axis=0)
                 set_weight_attrs(self.bias, {"output_dim": True})
 
         # set_rl_tp_degree
