@@ -363,9 +363,13 @@ class ColumnParallelLinear(LinearBase):
                 set_weight_attrs(self.bias, {"output_dim": True})
 
         # set_rl_tp_degree
-        self.weight.rl_tp_degree = fd_config.parallel_config.tensor_parallel_size
+        set_weight_attrs(
+            self.weight, {"rl_need_attr": {"rl_tp_degree": fd_config.parallel_config.tensor_parallel_size}}
+        )
         if self.with_bias:
-            self.bias.rl_tp_degree = fd_config.parallel_config.tensor_parallel_size
+            set_weight_attrs(
+                self.bias, {"rl_need_attr": {"rl_tp_degree": fd_config.parallel_config.tensor_parallel_size}}
+            )
 
 
 class MergedColumnParallelLinear(ColumnParallelLinear):
@@ -763,7 +767,9 @@ class RowParallelLinear(LinearBase):
         self.reduce_results = reduce_results
 
         # set_rl_tp_degree
-        self.weight.rl_tp_degree = fd_config.parallel_config.tensor_parallel_size
+        set_weight_attrs(
+            self.weight, {"rl_need_attr": {"rl_tp_degree": fd_config.parallel_config.tensor_parallel_size}}
+        )
 
     def forward_cuda(self, x: paddle.Tensor) -> paddle.Tensor:
         if self.fd_config.quant_config:
