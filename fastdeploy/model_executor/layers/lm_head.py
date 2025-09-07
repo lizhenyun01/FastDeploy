@@ -94,7 +94,8 @@ class ParallelLMHead(nn.Layer):
                         "model_format": self.fd_config.model_config.model_format,
                     },
                 )
-                self.linear.bias.rl_tp_degree = fd_config.parallel_config.tensor_parallel_size
+                if self.bias_key is not None:
+                    self.linear.bias.rl_tp_degree = fd_config.parallel_config.tensor_parallel_size
                 if self.nranks > 1:
                     set_weight_attrs(self.linear.weight, {"output_dim": True})
             else:
