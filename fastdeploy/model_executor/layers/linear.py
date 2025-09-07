@@ -364,7 +364,8 @@ class ColumnParallelLinear(LinearBase):
 
         # set_rl_tp_degree
         self.weight.rl_tp_degree = fd_config.parallel_config.tensor_parallel_size
-        self.bias.rl_tp_degree = fd_config.parallel_config.tensor_parallel_size
+        if self.with_bias:
+            self.bias.rl_tp_degree = fd_config.parallel_config.tensor_parallel_size
 
 
 class MergedColumnParallelLinear(ColumnParallelLinear):
