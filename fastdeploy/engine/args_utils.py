@@ -191,7 +191,7 @@ class EngineArgs:
     """
     Flag to indicate whether to use warm-up before inference.
     """
-    enable_prefix_caching: bool = True
+    enable_prefix_caching: bool = False
     """
     Flag to enable prefix caching.
     """
