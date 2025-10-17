@@ -1253,7 +1253,9 @@ class GPUModelRunner(ModelRunnerBase):
 
             if self.speculative_decoding:
                 if self.speculative_method == "mtp":
-                    self.proposer.run(full_hidden_states=model_output)
+                    self.proposer.run(
+                        full_hidden_states=model_output, step_use_cudagraph=self.forward_meta.step_use_cudagraph
+                    )
                 else:
                     self.proposer.run(share_inputs=self.share_inputs)
 
@@ -1600,7 +1602,9 @@ class GPUModelRunner(ModelRunnerBase):
         # 6. Speculative decode
         if self.speculative_decoding:
             if self.speculative_method == "mtp":
-                self.proposer.run(full_hidden_states=model_output)
+                self.proposer.run(
+                    full_hidden_states=model_output, step_use_cudagraph=self.forward_meta.step_use_cudagraph
+                )
             else:
                 self.proposer.run(share_inputs=self.share_inputs)
 
