@@ -97,7 +97,7 @@ class GpuWorker(WorkerBase):
 
     def exist_decode(self):
         """
-        check whether prefill stage exist
+        check whether decode stage exist
         """
         return self.model_runner.exist_decode()
 
