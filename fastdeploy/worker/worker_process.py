@@ -280,7 +280,6 @@ class PaddleDisWorkerProc:
                 )
 
             self.insert_step = False
-            req_dicts = None
             self.worker_healthy_live_signal.value[local_rank % self.max_chips_per_node] = int(time.time())
 
             # The first worker detects whether there are tasks in the task queue
@@ -339,13 +338,6 @@ class PaddleDisWorkerProc:
                     num_running_requests = int(bsz)
                     req_dicts.extend(req_dict)
 
-            if (not self.parallel_config.use_ep) and (not self.worker.model_runner.not_need_stop()):
-                if self.ranks > 1:
-                    paddle.distributed.barrier(self.parallel_config.tp_group)
-
-                time.sleep(0.001)
-                continue
-
             if (
                 envs.ENABLE_V1_KVCACHE_SCHEDULER
                 and self.fd_config.enable_attention_dp_balance
@@ -393,6 +385,11 @@ class PaddleDisWorkerProc:
                     f"Rank: {self.local_rank}, num_running_requests: {num_running_requests}, "
                     f"num_insert_requests: {len(req_dicts)}, req_ids: {req_ids}"
                 )
+            if (not self.parallel_config.use_ep) and (not self.worker.model_runner.not_need_stop()):
+                if self.ranks > 1:
+                    paddle.distributed.barrier(self.parallel_config.tp_group)
+                time.sleep(0.001)
+                continue
             # Execute model to generate token. The generated token will be written to the buffer.
             # These generated tokens can be obtained through get_output op.
             self.worker.execute_model(req_dicts, num_running_requests)

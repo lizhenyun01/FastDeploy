@@ -97,21 +97,18 @@ class WorkerBase(ABC):
         """Basic health check (override for device-specific checks)."""
         return NotImplementedError
 
-    @abstractmethod
     def exist_prefill(self) -> None:
         """check whether prefill stage exist."""
-        raise NotImplementedError
+        raise True
 
-    @abstractmethod
     def exist_decode(self) -> None:
         """
         check whether decode stage exist
         """
-        raise NotImplementedError
+        raise False
 
-    @abstractmethod
     def get_real_bsz(self) -> None:
         """
         Get real bsz
         """
-        raise NotImplementedError
+        raise 0
