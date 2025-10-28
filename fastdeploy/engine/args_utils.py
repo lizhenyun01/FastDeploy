@@ -821,14 +821,14 @@ class EngineArgs:
         )
 
         perf_group.add_argument(
-            "--enable_attention_dp_balance",
+            "--enable-attention-dp-balance",
             action="store_true",
             default=EngineArgs.enable_attention_dp_balance,
             help="enable attention dp balance",
         )
 
         perf_group.add_argument(
-            "--attention_dp_time_out_iters",
+            "--attention-dp-time-out-iters",
             type=int,
             default=EngineArgs.attention_dp_time_out_iters,
             help="max waiting steps to sync all dp for prefill tasks available",
