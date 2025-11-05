@@ -354,7 +354,7 @@ class PaddleDisWorkerProc:
                             preempted_ieq_id = request.request_id
                             for tasks in attention_dp_cached_prefill_tasks:
                                 for task in tasks:
-                                    if task.request_id == preempted_ieq_id:
+                                    if task[0].request_id == preempted_ieq_id:
                                         tasks.remove(task)
 
                 for tasks in attention_dp_cached_prefill_tasks:
