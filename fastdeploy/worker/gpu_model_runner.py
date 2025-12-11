@@ -1366,8 +1366,8 @@ class GPUModelRunner(ModelRunnerBase):
                 self.top_p_normalized_logprobs = any(
                     req.sampling_params.top_p_normalized_logprobs for req in logprobs_reqs
                 )
-            else:
-                self.max_logprobs = None
+            elif self.enable_logprob:
+                self.max_logprobs = None if not self.speculative_decoding else 0
 
         # Remove padding
         (
@@ -2355,6 +2355,19 @@ class GPUModelRunner(ModelRunnerBase):
                     self.sampling_metadata,
                     p_done_idxs,
                 )
+
+                if (
+                    self.enable_logprob
+                    and not envs.FD_USE_GET_SAVE_OUTPUT_V1
+                    and sampler_output.logprobs_tensors is None
+                ):
+                    sampler_output.logprobs_tensors = LogprobsTensors(
+                        logprob_token_ids=sampler_output.sampled_token_ids,
+                        logprobs=paddle.empty_like(sampler_output.sampled_token_ids, device="cpu", dtype="float32"),
+                        selected_token_ranks=paddle.empty(
+                            [sampler_output.sampled_token_ids.shape[0]], device="cpu", dtype="int64"
+                        ),
+                    )
                 if self.parallel_config.tensor_parallel_size > 1:
                     paddle.distributed.broadcast(
                         sampler_output.sampled_token_ids,
