@@ -538,7 +538,7 @@ class GPUModelRunner(ModelRunnerBase):
                             image_features_output is not None
                         ), f"image_features_output is None, images_lst length: {len(multi_vision_inputs['images_lst'])}"
                         grid_thw = multi_vision_inputs["grid_thw_lst"][thw_idx]
-                        mm_token_lenght = (grid_thw[1] * grid_thw[2]) // 4
+                        mm_token_lenght = inputs["mm_num_token_func"](grid_thw=grid_thw)
                         mm_feature = image_features_output[feature_idx : feature_idx + mm_token_lenght]
 
                         # add feature to encoder cache
@@ -563,7 +563,7 @@ class GPUModelRunner(ModelRunnerBase):
             image_features_output = self.extract_vision_features(multi_vision_inputs)
             for feature_position in multi_vision_inputs["feature_position_list"]:
                 grid_thw = multi_vision_inputs["grid_thw_lst"][thw_idx]
-                mm_token_lenght = (grid_thw[1] * grid_thw[2]) // 4
+                mm_token_lenght = inputs["mm_num_token_func"](grid_thw=grid_thw)
                 mm_feature = image_features_output[feature_idx : feature_idx + mm_token_lenght]
 
                 feature_start = feature_position.offset
@@ -645,7 +645,6 @@ class GPUModelRunner(ModelRunnerBase):
             request = req_dicts[i]
             # assert isinstance(request, Request)
             idx = request.idx
-            self.share_inputs["req_ids"][idx] = str(request.request_id)
 
             if hasattr(request, "pooling_params") and request.pooling_params is not None:
                 batch_pooling_params.append(request.pooling_params)
@@ -653,6 +652,7 @@ class GPUModelRunner(ModelRunnerBase):
             logits_info = None
             prefill_tokens = []
             if request.task_type.value == RequestType.PREFILL.value:  # prefill task
+                self.share_inputs["req_ids"][idx] = str(request.request_id)
                 # guided decoding
                 if (
                     request.guided_json is not None
@@ -1664,10 +1664,12 @@ class GPUModelRunner(ModelRunnerBase):
                     key_cache_scales = paddle.full(
                         shape=kv_cache_scale_shape, fill_value=0, dtype=paddle.get_default_dtype()
                     )
+                    set_data_ipc(key_cache_scales, key_cache_scales_name)
                     if value_cache_shape:
                         val_cache_scales = paddle.full(
                             shape=kv_cache_scale_shape, fill_value=0, dtype=paddle.get_default_dtype()
                         )
+                        set_data_ipc(val_cache_scales, value_cache_scales_name)
                         cache_kvs_list.extend([key_cache_scales, val_cache_scales])
                     else:
                         cache_kvs_list.extend([key_cache_scales])
@@ -1874,7 +1876,7 @@ class GPUModelRunner(ModelRunnerBase):
                     group=self.parallel_config.tp_group,
                 )
         else:
-            self.sampler(
+            sampler_output = self.sampler(
                 logits,
                 self.sampling_metadata,
                 self.model_config.max_model_len,
@@ -1882,7 +1884,6 @@ class GPUModelRunner(ModelRunnerBase):
                 accept_all_drafts,
                 reject_all_drafts,
             )
-            sampler_output = None
             if self.parallel_config.tensor_parallel_size > 1:
                 paddle.distributed.broadcast(
                     self.share_inputs["accept_tokens"],
@@ -1947,7 +1948,7 @@ class GPUModelRunner(ModelRunnerBase):
             async_output_queue=self.async_output_queue,
             think_end_id=self.model_config.think_end_id,
             line_break_id=self.model_config.line_break_id,
-            enable_entropy=self.enable_entropy,
+            enable_entropy=self.enable_entropy and self.parallel_config.tensor_parallel_rank == 0,
         )
         if self.speculative_decoding:
             if self.speculative_method == "mtp":
@@ -2154,51 +2155,12 @@ class GPUModelRunner(ModelRunnerBase):
                         ),
                         batch_size=int(capture_size / (self.speculative_config.num_speculative_tokens + 1)),
                         in_capturing=True,
-                        expected_decode_len=self.speculative_config.num_speculative_tokens,
+                        expected_decode_len=self.speculative_config.num_speculative_tokens * 2 + 1,
                         accept_all_drafts=True,
                     )
                     logger.info(
-                        f"Warm up the Target model with the num_tokens:{capture_size}, expected_decode_len:{self.speculative_config.num_speculative_tokens}"
+                        f"Warm up the model with the num_tokens:{capture_size}, expected_decode_len:{self.speculative_config.num_speculative_tokens}"
                     )
-                if self.graph_opt_config.draft_model_use_cudagraph:
-                    # Capture Draft Model without bsz 1
-                    # NOTE(liujundong): expected_decode_len = 1, will affect mtp capture in cudagraph
-                    for batch_size in sorted(capture_sizes, reverse=True):
-                        if batch_size == 1:
-                            logger.info("Skip token_num = 1, when capture Draft model for mtp")
-                        else:
-                            assert batch_size % 2 == 0
-                            self._dummy_run(
-                                num_tokens=(
-                                    self.scheduler_config.max_num_seqs
-                                    if self.scheduler_config.splitwise_role == "decode"
-                                    else self.scheduler_config.max_num_batched_tokens
-                                ),
-                                batch_size=int(batch_size / 2),
-                                in_capturing=True,
-                                expected_decode_len=3,
-                                accept_all_drafts=True,
-                            )
-                            logger.info(
-                                f"Warm up the Draft model with the num_tokens:{batch_size}, expected_decode_len:{3}"
-                            )
-                    # Capture Draft Model with bsz 1
-                    if 1 in capture_sizes:
-                        self._dummy_run(
-                            num_tokens=(
-                                self.scheduler_config.max_num_seqs
-                                if self.scheduler_config.splitwise_role == "decode"
-                                else self.scheduler_config.max_num_batched_tokens
-                            ),
-                            batch_size=int(1),
-                            in_capturing=True,
-                            expected_decode_len=3,
-                            accept_all_drafts=False,
-                            reject_all_drafts=True,
-                        )
-                        logger.info(
-                            f"Warm up the Draft model with the num_tokens:{batch_size}, expected_decode_len:{3}"
-                        )
             else:
                 for batch_size in sorted(capture_sizes, reverse=True):
                     self._dummy_run(
@@ -2414,7 +2376,7 @@ class GPUModelRunner(ModelRunnerBase):
                 speculative_decoding=self.speculative_decoding,
                 skip_save_output=False,
                 async_output_queue=self.async_output_queue,
-                enable_entropy=self.enable_entropy,
+                enable_entropy=self.enable_entropy and self.parallel_config.tensor_parallel_rank == 0,
             )
 
             return None
@@ -2544,7 +2506,7 @@ class GPUModelRunner(ModelRunnerBase):
                 async_output_queue=self.async_output_queue,
                 think_end_id=self.model_config.think_end_id,
                 line_break_id=self.model_config.line_break_id,
-                enable_entropy=self.enable_entropy,
+                enable_entropy=self.enable_entropy and self.parallel_config.tensor_parallel_rank == 0,
             )
             if self.guided_backend is not None and sampler_output is not None:
                 self.sampler.post_process(sampler_output.sampled_token_ids)
@@ -3031,6 +2993,7 @@ class GPUModelRunner(ModelRunnerBase):
             base=self.model_config.rope_theta,
             max_position=self.model_config.max_model_len,
             freq_allocation=getattr(self.model_config, "freq_allocation", 20),
+            rope_scaling=getattr(self.model_config, "rope_scaling", {}),
             model_type=self.model_config.model_type,
             max_len_lst=max_len_lst,
             cumsum_seqlens=cumsum_seqlens,
