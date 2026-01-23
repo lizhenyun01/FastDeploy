@@ -14,16 +14,27 @@
 # limitations under the License.
 """
 
+import traceback
 from abc import abstractmethod
 
 import paddle
 from paddle import nn
 from paddleformers.utils.log import logger
 
+from fastdeploy import envs
+
 try:
-    from paddle.distributed.communication import deep_ep
-except:
-    logger.warning("import deep_ep Failed!")
+    if envs.FD_USE_PFCC_DEEP_EP:
+        paddle.compat.enable_torch_proxy(scope={"deep_ep"})  # Enable torch proxy before importing deep_ep
+        import paddlefleet.ops.deep_ep as deep_ep
+    else:
+        from paddle.distributed.communication import deep_ep
+except Exception as e:
+    logger.error(
+        f"import deep_ep failed! FD_USE_PFCC_DEEP_EP={envs.FD_USE_PFCC_DEEP_EP}. " f"type={type(e).__name__}, err={e}"
+    )
+    logger.error("Traceback:\n" + traceback.format_exc())
+    raise
 
 from typing import Optional
 
@@ -280,23 +291,40 @@ class DeepEPEngine:
         if self.deepep_engine is None:
             raise RuntimeError("DeepEP buffer not initialized!")
 
-        (
-            packed_recv_x,
-            recv_expert_count,
-            handle,
-            _,
-            dispatch_hook,
-        ) = self.deepep_engine.low_latency_dispatch(
-            hidden_states,
-            topk_idx,
-            expertwise_scale,
-            self.buffer.num_max_dispatch_tokens_per_rank,
-            self.num_experts,
-            use_fp8=use_fp8,
-            async_finish=False,
-            return_recv_hook=True,
-            num_per_channel=quant_group_size,
-        )
+        if envs.FD_USE_PFCC_DEEP_EP:
+            (
+                packed_recv_x,
+                recv_expert_count,
+                handle,
+                _,
+                dispatch_hook,
+            ) = self.deepep_engine.low_latency_dispatch(
+                hidden_states,
+                topk_idx,
+                self.buffer.num_max_dispatch_tokens_per_rank,
+                self.num_experts,
+                use_fp8=use_fp8,
+                async_finish=False,
+                return_recv_hook=True,
+            )
+        else:
+            (
+                packed_recv_x,
+                recv_expert_count,
+                handle,
+                _,
+                dispatch_hook,
+            ) = self.deepep_engine.low_latency_dispatch(
+                hidden_states,
+                topk_idx,
+                expertwise_scale,
+                self.buffer.num_max_dispatch_tokens_per_rank,
+                self.num_experts,
+                use_fp8=use_fp8,
+                async_finish=False,
+                return_recv_hook=True,
+                num_per_channel=quant_group_size,
+            )
 
         return packed_recv_x, recv_expert_count, handle, dispatch_hook
 
