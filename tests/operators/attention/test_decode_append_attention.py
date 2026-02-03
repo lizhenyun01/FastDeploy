@@ -763,8 +763,8 @@ class TestDecodeAppendAttention(unittest.TestCase):
             kv_token_num_cpu[0].item(),
             self.max_model_len,
             self.rms_norm_eps,
-            self.cache_quant_type,
             False,  # use_neox_rotary_style
+            self.cache_quant_type,
             self.rope_3d,
         )
 
