@@ -764,6 +764,7 @@ class TestDecodeAppendAttention(unittest.TestCase):
             self.max_model_len,
             self.rms_norm_eps,
             self.cache_quant_type,
+            False,  # use_neox_rotary_style
             self.rope_3d,
         )
 
