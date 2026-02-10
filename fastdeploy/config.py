@@ -1807,6 +1807,9 @@ class FDConfig:
                 # It will hang when real batch_size < tp_size
                 self.graph_opt_config.filter_capture_size(tp_size=self.parallel_config.tensor_parallel_size)
 
+        if self.routing_replay_config is not None and self.routing_replay_config.enable_routing_replay:
+            assert self.model_config.runner_type != "pooling", "Routing replay can only work with non-pooling models."
+
         if ErnieArchitectures.is_ernie5_arch(self.model_config.architectures):
             # ernie5 model not support chunked_mm_input
             self.cache_config.disable_chunked_mm_input = True
