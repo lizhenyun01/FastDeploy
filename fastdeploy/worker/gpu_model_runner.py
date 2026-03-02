@@ -2861,6 +2861,10 @@ class GPUModelRunner(ModelRunnerBase):
         self.in_progress_prompt_logprobs.clear()
         self.forward_batch_reqs_list = [None for _ in range(self.scheduler_config.max_num_seqs)]
 
+        # Routing Replay
+        if self.routing_replay_manager:
+            self.routing_replay_manager.clear_all_request()
+
     def update_parameters(self, pid):
         """Dynamic model loader use to update parameters use for RL"""
         # Update parameters

@@ -389,6 +389,11 @@ class RoutingReplayManager:
         rollout_id = reversed_tmp_str[-1][::-1]
         return rollout_id
 
+    def clear_all_request(self):
+        """Clear all requests"""
+        self.routing_replay_table.fill_(-1)
+        self.routing_batch_to_request = {}
+
 
 class StoreWrapper(object):
     def __init__(self, fd_config: False) -> None:
