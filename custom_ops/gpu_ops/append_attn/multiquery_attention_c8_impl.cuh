@@ -1577,7 +1577,6 @@ void MultiQueryAppendC8Attention(
           sliding_window,
           sink_size);
     } else {
-
       launchWithPdlWhenEnabled(
           split_kv_kernel,
           grids,
@@ -1644,7 +1643,8 @@ void MultiQueryAppendC8Attention(
             blocks_merge,
             0,
             stream,
-            reinterpret_cast<NV_TYPE *>(const_cast<T *>(tmp_workspace.data<T>())),
+            reinterpret_cast<NV_TYPE *>(
+                const_cast<T *>(tmp_workspace.data<T>())),
             static_cast<float *>(tmp_m.data<float>()),
             static_cast<float *>(tmp_d.data<float>()),
             seq_lens_q.data<int>(),
@@ -1686,7 +1686,8 @@ void MultiQueryAppendC8Attention(
             blocks_merge,
             0,
             stream,
-            reinterpret_cast<NV_TYPE *>(const_cast<T *>(tmp_workspace.data<T>())),
+            reinterpret_cast<NV_TYPE *>(
+                const_cast<T *>(tmp_workspace.data<T>())),
             static_cast<float *>(tmp_m.data<float>()),
             static_cast<float *>(tmp_d.data<float>()),
             seq_lens_q.data<int>(),
