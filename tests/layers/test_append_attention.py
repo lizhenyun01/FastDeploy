@@ -510,6 +510,20 @@ class TestAppendGroupQueryAttnWithRope(unittest.TestCase):
         self.decoder_num_blocks_device = paddle.full([1], 0, dtype="int32")
         self.decoder_chunk_size_device = paddle.full([1], 64, dtype="int32")
         self.max_len_tensor_cpu = paddle.full([8], 0, dtype="int32").cpu()
+        decoder_max_partition_size = 32768
+        decoder_step_token_num = self.seq_len
+        max_num_chunk = (self.max_seq_len + decoder_max_partition_size - 1) // decoder_max_partition_size
+        self.tmp_workspace = paddle.full(
+            [self.batch_size * decoder_step_token_num, max_num_chunk, self.q_num_head * self.dim_head],
+            0,
+            dtype=paddle.get_default_dtype(),
+        )
+        self.tmp_m = paddle.full(
+            [self.batch_size * decoder_step_token_num, max_num_chunk, self.q_num_head], 0, dtype="float32"
+        )
+        self.tmp_d = paddle.full(
+            [self.batch_size * decoder_step_token_num, max_num_chunk, self.q_num_head], 0, dtype="float32"
+        )
 
         self.encoder_batch_ids = paddle.full([self.batch_size], 0, dtype="int32")
         self.encoder_tile_ids_per_batch = paddle.full([self.batch_size], 0, dtype="int32")
@@ -638,6 +652,9 @@ class TestAppendGroupQueryAttnWithRope(unittest.TestCase):
             qkv_copy = copy.deepcopy(qkv)
             append_attention(
                 qkv_copy,
+                self.tmp_workspace,
+                self.tmp_m,
+                self.tmp_d,
                 self.cache_k_T,
                 self.cache_v_T,
                 self.seq_lens_encoder,
@@ -701,6 +718,9 @@ class TestAppendGroupQueryAttnWithRope(unittest.TestCase):
                 start_time = time.time()
             out = append_attention(
                 qkv,
+                self.tmp_workspace,
+                self.tmp_m,
+                self.tmp_d,
                 self.cache_k,
                 self.cache_v,
                 self.seq_lens_encoder,

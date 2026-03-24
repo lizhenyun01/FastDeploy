@@ -18,11 +18,15 @@
 template <typename T, typename OutT>
 void CascadeAppendAttentionC16Kernel(
     const AppendAttnMetaData& meta_data,
-    const paddle::Tensor& qkv,  // [token_num, (num_heads + 2* kv_num_head) * head_dim]
+    const paddle::Tensor&
+        qkv,  // [token_num, (num_heads + 2* kv_num_head) * head_dim]
     const paddle::Tensor&
         cache_k,  // [max_block_num, num_heads, block_size, head_dim]
     const paddle::Tensor&
         cache_v,  // [max_block_num, num_heads, head_dim, block_size]
+    paddle::Tensor& tmp_workspace,
+    paddle::Tensor& tmp_m,
+    paddle::Tensor& tmp_d,
     const paddle::optional<paddle::Tensor>& attn_mask,
     const paddle::optional<paddle::Tensor>&
         cache_k_scale,  // [num_kv_heads, head_dim]
@@ -35,9 +39,8 @@ void CascadeAppendAttentionC16Kernel(
     const paddle::optional<paddle::Tensor>&
         shift_bias,  // [num_kv_heads, head_dim]
     const paddle::optional<paddle::Tensor>&
-        smooth_weight,  // [num_kv_heads, head_dim]
-    const paddle::optional<paddle::Tensor>&
-        sinks,  // [num_heads]
+        smooth_weight,                              // [num_kv_heads, head_dim]
+    const paddle::optional<paddle::Tensor>& sinks,  // [num_heads]
     const paddle::Tensor& seq_lens_q,
     const paddle::Tensor& seq_lens_kv,
     const paddle::Tensor& seq_lens_encoder,
@@ -99,6 +102,9 @@ void CascadeAppendAttentionC16Kernel(
                                 qkv,
                                 cache_k,
                                 cache_v,
+                                tmp_workspace,
+                                tmp_m,
+                                tmp_d,
                                 attn_mask,
                                 shift_bias,
                                 smooth_weight,
@@ -127,13 +133,17 @@ void CascadeAppendAttentionC16Kernel(
                           })})})})})})
 }
 
-template void CascadeAppendAttentionC16Kernel<paddle::bfloat16, paddle::bfloat16>(
+template void
+CascadeAppendAttentionC16Kernel<paddle::bfloat16, paddle::bfloat16>(
     const AppendAttnMetaData& meta_data,
     const paddle::Tensor& qkv,  // [token_num, num_heads, head_dim]
     const paddle::Tensor&
         cache_k,  // [max_block_num, num_heads, block_size, head_dim]
     const paddle::Tensor&
         cache_v,  // [max_block_num, num_heads, head_dim, block_size]
+    paddle::Tensor& tmp_workspace,
+    paddle::Tensor& tmp_m,
+    paddle::Tensor& tmp_d,
     const paddle::optional<paddle::Tensor>& attn_mask,
     const paddle::optional<paddle::Tensor>&
         cache_k_scale,  // [num_kv_heads, head_dim]
@@ -146,9 +156,8 @@ template void CascadeAppendAttentionC16Kernel<paddle::bfloat16, paddle::bfloat16
     const paddle::optional<paddle::Tensor>&
         shift_bias,  // [num_kv_heads, head_dim]
     const paddle::optional<paddle::Tensor>&
-        smooth_weight,  // [num_kv_heads, head_dim]
-    const paddle::optional<paddle::Tensor>&
-        sinks,  // [num_heads]
+        smooth_weight,                              // [num_kv_heads, head_dim]
+    const paddle::optional<paddle::Tensor>& sinks,  // [num_heads]
     const paddle::Tensor& seq_lens_q,
     const paddle::Tensor& seq_lens_kv,
     const paddle::Tensor& seq_lens_encoder,
@@ -174,13 +183,17 @@ template void CascadeAppendAttentionC16Kernel<paddle::bfloat16, paddle::bfloat16
     paddle::Tensor* out,
     const int sliding_window);
 
-template void CascadeAppendAttentionC16Kernel<paddle::bfloat16, paddle::float8_e4m3fn>(
+template void
+CascadeAppendAttentionC16Kernel<paddle::bfloat16, paddle::float8_e4m3fn>(
     const AppendAttnMetaData& meta_data,
     const paddle::Tensor& qkv,  // [token_num, num_heads, head_dim]
     const paddle::Tensor&
         cache_k,  // [max_block_num, num_heads, block_size, head_dim]
     const paddle::Tensor&
         cache_v,  // [max_block_num, num_heads, head_dim, block_size]
+    paddle::Tensor& tmp_workspace,
+    paddle::Tensor& tmp_m,
+    paddle::Tensor& tmp_d,
     const paddle::optional<paddle::Tensor>& attn_mask,
     const paddle::optional<paddle::Tensor>&
         cache_k_scale,  // [num_kv_heads, head_dim]
@@ -193,9 +206,8 @@ template void CascadeAppendAttentionC16Kernel<paddle::bfloat16, paddle::float8_e
     const paddle::optional<paddle::Tensor>&
         shift_bias,  // [num_kv_heads, head_dim]
     const paddle::optional<paddle::Tensor>&
-        smooth_weight,  // [num_kv_heads, head_dim]
-    const paddle::optional<paddle::Tensor>&
-        sinks,  // [num_heads]
+        smooth_weight,                              // [num_kv_heads, head_dim]
+    const paddle::optional<paddle::Tensor>& sinks,  // [num_heads]
     const paddle::Tensor& seq_lens_q,
     const paddle::Tensor& seq_lens_kv,
     const paddle::Tensor& seq_lens_encoder,
@@ -228,6 +240,9 @@ template void CascadeAppendAttentionC16Kernel<paddle::bfloat16, int8_t>(
         cache_k,  // [max_block_num, num_heads, block_size, head_dim]
     const paddle::Tensor&
         cache_v,  // [max_block_num, num_heads, head_dim, block_size]
+    paddle::Tensor& tmp_workspace,
+    paddle::Tensor& tmp_m,
+    paddle::Tensor& tmp_d,
     const paddle::optional<paddle::Tensor>& attn_mask,
     const paddle::optional<paddle::Tensor>&
         cache_k_scale,  // [num_kv_heads, head_dim]
@@ -240,9 +255,8 @@ template void CascadeAppendAttentionC16Kernel<paddle::bfloat16, int8_t>(
     const paddle::optional<paddle::Tensor>&
         shift_bias,  // [num_kv_heads, head_dim]
     const paddle::optional<paddle::Tensor>&
-        smooth_weight,  // [num_kv_heads, head_dim]
-    const paddle::optional<paddle::Tensor>&
-        sinks,  // [num_heads]
+        smooth_weight,                              // [num_kv_heads, head_dim]
+    const paddle::optional<paddle::Tensor>& sinks,  // [num_heads]
     const paddle::Tensor& seq_lens_q,
     const paddle::Tensor& seq_lens_kv,
     const paddle::Tensor& seq_lens_encoder,
@@ -272,24 +286,26 @@ template void CascadeAppendAttentionC16Kernel<paddle::float16, paddle::float16>(
     const AppendAttnMetaData& meta_data,
     const paddle::Tensor& qkv,  // [token_num, num_heads, head_dim]
     const paddle::Tensor&
-    cache_k,  // [max_block_num, num_heads, block_size, head_dim]
+        cache_k,  // [max_block_num, num_heads, block_size, head_dim]
     const paddle::Tensor&
-    cache_v,  // [max_block_num, num_heads, head_dim, block_size]
+        cache_v,  // [max_block_num, num_heads, head_dim, block_size]
+    paddle::Tensor& tmp_workspace,
+    paddle::Tensor& tmp_m,
+    paddle::Tensor& tmp_d,
     const paddle::optional<paddle::Tensor>& attn_mask,
     const paddle::optional<paddle::Tensor>&
-    cache_k_scale,  // [num_kv_heads, head_dim]
+        cache_k_scale,  // [num_kv_heads, head_dim]
     const paddle::optional<paddle::Tensor>&
-    cache_v_scale,  // [num_kv_heads, head_dim]
+        cache_v_scale,  // [num_kv_heads, head_dim]
     const paddle::optional<paddle::Tensor>&
-    cache_k_zp,  // [num_kv_heads, head_dim]
+        cache_k_zp,  // [num_kv_heads, head_dim]
     const paddle::optional<paddle::Tensor>&
-    cache_v_zp,  // [num_kv_heads, head_dim]
+        cache_v_zp,  // [num_kv_heads, head_dim]
     const paddle::optional<paddle::Tensor>&
-    shift_bias,  // [num_kv_heads, head_dim]
+        shift_bias,  // [num_kv_heads, head_dim]
     const paddle::optional<paddle::Tensor>&
-    smooth_weight,  // [num_kv_heads, head_dim]
-    const paddle::optional<paddle::Tensor>&
-        sinks,  // [num_heads]
+        smooth_weight,                              // [num_kv_heads, head_dim]
+    const paddle::optional<paddle::Tensor>& sinks,  // [num_heads]
     const paddle::Tensor& seq_lens_q,
     const paddle::Tensor& seq_lens_kv,
     const paddle::Tensor& seq_lens_encoder,
@@ -315,13 +331,17 @@ template void CascadeAppendAttentionC16Kernel<paddle::float16, paddle::float16>(
     paddle::Tensor* out,
     const int sliding_window);
 
-template void CascadeAppendAttentionC16Kernel<paddle::float16, paddle::float8_e4m3fn>(
+template void
+CascadeAppendAttentionC16Kernel<paddle::float16, paddle::float8_e4m3fn>(
     const AppendAttnMetaData& meta_data,
     const paddle::Tensor& qkv,  // [token_num, num_heads, head_dim]
     const paddle::Tensor&
         cache_k,  // [max_block_num, num_heads, block_size, head_dim]
     const paddle::Tensor&
         cache_v,  // [max_block_num, num_heads, head_dim, block_size]
+    paddle::Tensor& tmp_workspace,
+    paddle::Tensor& tmp_m,
+    paddle::Tensor& tmp_d,
     const paddle::optional<paddle::Tensor>& attn_mask,
     const paddle::optional<paddle::Tensor>&
         cache_k_scale,  // [num_kv_heads, head_dim]
@@ -334,9 +354,8 @@ template void CascadeAppendAttentionC16Kernel<paddle::float16, paddle::float8_e4
     const paddle::optional<paddle::Tensor>&
         shift_bias,  // [num_kv_heads, head_dim]
     const paddle::optional<paddle::Tensor>&
-        smooth_weight,  // [num_kv_heads, head_dim]
-    const paddle::optional<paddle::Tensor>&
-        sinks,  // [num_heads]
+        smooth_weight,                              // [num_kv_heads, head_dim]
+    const paddle::optional<paddle::Tensor>& sinks,  // [num_heads]
     const paddle::Tensor& seq_lens_q,
     const paddle::Tensor& seq_lens_kv,
     const paddle::Tensor& seq_lens_encoder,
@@ -369,6 +388,9 @@ template void CascadeAppendAttentionC16Kernel<paddle::float16, int8_t>(
         cache_k,  // [max_block_num, num_heads, block_size, head_dim]
     const paddle::Tensor&
         cache_v,  // [max_block_num, num_heads, head_dim, block_size]
+    paddle::Tensor& tmp_workspace,
+    paddle::Tensor& tmp_m,
+    paddle::Tensor& tmp_d,
     const paddle::optional<paddle::Tensor>& attn_mask,
     const paddle::optional<paddle::Tensor>&
         cache_k_scale,  // [num_kv_heads, head_dim]
@@ -381,9 +403,8 @@ template void CascadeAppendAttentionC16Kernel<paddle::float16, int8_t>(
     const paddle::optional<paddle::Tensor>&
         shift_bias,  // [num_kv_heads, head_dim]
     const paddle::optional<paddle::Tensor>&
-        smooth_weight,  // [num_kv_heads, head_dim]
-    const paddle::optional<paddle::Tensor>&
-        sinks,  // [num_heads]
+        smooth_weight,                              // [num_kv_heads, head_dim]
+    const paddle::optional<paddle::Tensor>& sinks,  // [num_heads]
     const paddle::Tensor& seq_lens_q,
     const paddle::Tensor& seq_lens_kv,
     const paddle::Tensor& seq_lens_encoder,
