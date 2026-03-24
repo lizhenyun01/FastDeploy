@@ -27,6 +27,9 @@ void CascadeAppendAttentionKernel(
         cache_k,  // [max_block_num, num_heads, block_size, head_dim]
     const paddle::Tensor&
         cache_v,  // [max_block_num, num_heads, head_dim, block_size]
+    paddle::Tensor &tmp_workspace,
+    paddle::Tensor &tmp_m,
+    paddle::Tensor &tmp_d,
     const paddle::optional<paddle::Tensor>& attn_mask,
     const paddle::optional<paddle::Tensor>&
         cache_k_scale,  // [num_kv_heads, head_dim]

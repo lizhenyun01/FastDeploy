@@ -23,6 +23,9 @@ void CascadeAppendAttentionC4Kernel(
         cache_k,  // [max_block_num, num_heads, block_size, head_dim]
     const paddle::Tensor&
         cache_v,  // [max_block_num, num_heads, head_dim, block_size]
+    paddle::Tensor &tmp_workspace,
+    paddle::Tensor &tmp_m,
+    paddle::Tensor &tmp_d,
     const paddle::optional<paddle::Tensor>& attn_mask,
     const paddle::optional<paddle::Tensor>&
         cache_k_scale,  // [num_kv_heads, head_dim]
@@ -99,6 +102,9 @@ void CascadeAppendAttentionC4Kernel(
                                 qkv,
                                 cache_k,
                                 cache_v,
+                                tmp_workspace,
+                                tmp_m,
+                                tmp_d,
                                 attn_mask,
                                 cache_k_scale.get(),
                                 cache_v_scale.get(),
@@ -138,6 +144,9 @@ template void CascadeAppendAttentionC4Kernel<paddle::bfloat16, paddle::bfloat16>
         cache_k,  // [max_block_num, num_heads, block_size, head_dim]
     const paddle::Tensor&
         cache_v,  // [max_block_num, num_heads, head_dim, block_size]
+    paddle::Tensor &tmp_workspace,
+    paddle::Tensor &tmp_m,
+    paddle::Tensor &tmp_d,
     const paddle::optional<paddle::Tensor>& attn_mask,
     const paddle::optional<paddle::Tensor>&
         cache_k_scale,  // [num_kv_heads, head_dim]
@@ -185,6 +194,9 @@ template void CascadeAppendAttentionC4Kernel<paddle::bfloat16, paddle::float8_e4
         cache_k,  // [max_block_num, num_heads, block_size, head_dim]
     const paddle::Tensor&
         cache_v,  // [max_block_num, num_heads, head_dim, block_size]
+    paddle::Tensor &tmp_workspace,
+    paddle::Tensor &tmp_m,
+    paddle::Tensor &tmp_d,
     const paddle::optional<paddle::Tensor>& attn_mask,
     const paddle::optional<paddle::Tensor>&
         cache_k_scale,  // [num_kv_heads, head_dim]
@@ -232,6 +244,9 @@ template void CascadeAppendAttentionC4Kernel<paddle::bfloat16, int8_t>(
         cache_k,  // [max_block_num, num_heads, block_size, head_dim]
     const paddle::Tensor&
         cache_v,  // [max_block_num, num_heads, head_dim, block_size]
+    paddle::Tensor &tmp_workspace,
+    paddle::Tensor &tmp_m,
+    paddle::Tensor &tmp_d,
     const paddle::optional<paddle::Tensor>& attn_mask,
     const paddle::optional<paddle::Tensor>&
         cache_k_scale,  // [num_kv_heads, head_dim]
@@ -279,6 +294,9 @@ template void CascadeAppendAttentionC4Kernel<paddle::float16, paddle::float16>(
         cache_k,  // [max_block_num, num_heads, block_size, head_dim]
     const paddle::Tensor&
         cache_v,  // [max_block_num, num_heads, head_dim, block_size]
+    paddle::Tensor &tmp_workspace,
+    paddle::Tensor &tmp_m,
+    paddle::Tensor &tmp_d,
     const paddle::optional<paddle::Tensor>& attn_mask,
     const paddle::optional<paddle::Tensor>&
         cache_k_scale,  // [num_kv_heads, head_dim]
@@ -326,6 +344,9 @@ template void CascadeAppendAttentionC4Kernel<paddle::float16, paddle::float8_e4m
         cache_k,  // [max_block_num, num_heads, block_size, head_dim]
     const paddle::Tensor&
         cache_v,  // [max_block_num, num_heads, head_dim, block_size]
+    paddle::Tensor &tmp_workspace,
+    paddle::Tensor &tmp_m,
+    paddle::Tensor &tmp_d,
     const paddle::optional<paddle::Tensor>& attn_mask,
     const paddle::optional<paddle::Tensor>&
         cache_k_scale,  // [num_kv_heads, head_dim]
@@ -373,6 +394,9 @@ template void CascadeAppendAttentionC4Kernel<paddle::float16, int8_t>(
         cache_k,  // [max_block_num, num_heads, block_size, head_dim]
     const paddle::Tensor&
         cache_v,  // [max_block_num, num_heads, head_dim, block_size]
+    paddle::Tensor &tmp_workspace,
+    paddle::Tensor &tmp_m,
+    paddle::Tensor &tmp_d,
     const paddle::optional<paddle::Tensor>& attn_mask,
     const paddle::optional<paddle::Tensor>&
         cache_k_scale,  // [num_kv_heads, head_dim]
