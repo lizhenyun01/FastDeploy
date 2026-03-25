@@ -652,11 +652,11 @@ class TestAppendGroupQueryAttnWithRope(unittest.TestCase):
             qkv_copy = copy.deepcopy(qkv)
             append_attention(
                 qkv_copy,
+                self.cache_k_T,
+                self.cache_v_T,
                 self.tmp_workspace,
                 self.tmp_m,
                 self.tmp_d,
-                self.cache_k_T,
-                self.cache_v_T,
                 self.seq_lens_encoder,
                 self.seq_lens_decoder,
                 self.seq_lens_this_time,
@@ -718,11 +718,11 @@ class TestAppendGroupQueryAttnWithRope(unittest.TestCase):
                 start_time = time.time()
             out = append_attention(
                 qkv,
+                self.cache_k,
+                self.cache_v,
                 self.tmp_workspace,
                 self.tmp_m,
                 self.tmp_d,
-                self.cache_k,
-                self.cache_v,
                 self.seq_lens_encoder,
                 self.seq_lens_decoder,
                 self.seq_lens_this_time,
