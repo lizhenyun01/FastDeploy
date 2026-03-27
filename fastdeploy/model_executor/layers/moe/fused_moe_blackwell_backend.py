@@ -57,7 +57,7 @@ from ..utils import get_sm_version
 
 if current_platform.is_cuda() and get_sm_version() >= 100:
     try:
-        from blackwell_ops import group_gemm_masked
+        from blackwell_ops import group_gemm_masked, unpack_and_repeat_int32_to_uint8
     except:
         group_gemm_masked = None
 
@@ -108,39 +108,39 @@ def reorder_sf_to_cutlass(sf_logical, mn_dim, kb_dim):
     return paddle.to_tensor(result.reshape(orig_shape), dtype=paddle.uint8)
 
 
-def unpack_and_repeat_int32_to_uint8(x):
-    """
-    方案4：使用 tile 实现重复
-    """
-    if hasattr(x, "numpy"):
-        x_np = x.numpy()
-    else:
-        x_np = np.array(x)
+# def unpack_and_repeat_int32_to_uint8(x):
+#     """
+#     方案4：使用 tile 实现重复
+#     """
+#     if hasattr(x, "numpy"):
+#         x_np = x.numpy()
+#     else:
+#         x_np = np.array(x)
 
-    e, m, n = x_np.shape
+#     e, m, n = x_np.shape
 
-    # 确保数组是连续的
-    if not x_np.flags["C_CONTIGUOUS"]:
-        x_np = np.ascontiguousarray(x_np)
+#     # 确保数组是连续的
+#     if not x_np.flags["C_CONTIGUOUS"]:
+#         x_np = np.ascontiguousarray(x_np)
 
-    # 将 int32 数组视为 uint8 数组（直接内存重解释）
-    x_uint8 = x_np.view(np.uint8).reshape(e, m, n, 4)
+#     # 将 int32 数组视为 uint8 数组（直接内存重解释）
+#     x_uint8 = x_np.view(np.uint8).reshape(e, m, n, 4)
 
-    # 使用 repeat 重复每个值4次
-    # 先增加一个维度，然后 repeat
-    x_expanded = x_uint8[:, :, :, :, np.newaxis]  # [e, m, n, 4, 1]
-    x_repeated = np.repeat(x_expanded, 4, axis=-1)  # [e, m, n, 4, 4]
+#     # 使用 repeat 重复每个值4次
+#     # 先增加一个维度，然后 repeat
+#     x_expanded = x_uint8[:, :, :, :, np.newaxis]  # [e, m, n, 4, 1]
+#     x_repeated = np.repeat(x_expanded, 4, axis=-1)  # [e, m, n, 4, 4]
 
-    # 重新排列维度
-    x_reshaped = x_repeated.reshape(e, m, n, 16)
+#     # 重新排列维度
+#     x_reshaped = x_repeated.reshape(e, m, n, 16)
 
-    # 合并最后两维
-    output_np = x_reshaped.reshape(e, m, n * 16)
+#     # 合并最后两维
+#     output_np = x_reshaped.reshape(e, m, n * 16)
 
-    output = paddle.to_tensor(output_np, dtype=paddle.uint8)
-    output = reorder_sf_to_cutlass(output, m, n * 16)
+#     output = paddle.to_tensor(output_np, dtype=paddle.uint8)
+#     output = reorder_sf_to_cutlass(output, m, n * 16)
 
-    return output
+#     return output
 
 
 def call_prefill_permute_to_masked_gemm(
@@ -612,8 +612,17 @@ class BlackwellGemmFusedMoeMethod(MoEMethodBase):
                 dtype=paddle.bfloat16,
             )
             permute_input = permute_input.reshape([-1, permute_input.shape[-1]])
-            permute_scale = unpack_and_repeat_int32_to_uint8(permute_scale)
-            weight_scale = unpack_and_repeat_int32_to_uint8(getattr(layer, self.added_scale_attrs[0]))
+
+            permute_scale_new = paddle.empty(
+                [permute_scale.shape[0], permute_scale.shape[1], permute_scale.shape[-1] * 16], dtype=paddle.uint8
+            )
+            unpack_and_repeat_int32_to_uint8(permute_scale, token_nums_per_expert, permute_scale_new)
+
+            weight_scale = getattr(layer, self.added_scale_attrs[0])
+            weight_scale_new = paddle.empty(
+                [weight_scale.shape[0], weight_scale.shape[1], weight_scale.shape[-1] * 16], dtype=paddle.uint8
+            )
+            unpack_and_repeat_int32_to_uint8(weight_scale, None, weight_scale_new)
 
             # masked group gemm
             # a: [num_local_experts * expected_m, k]
@@ -628,8 +637,8 @@ class BlackwellGemmFusedMoeMethod(MoEMethodBase):
             group_gemm_masked(
                 permute_input,
                 getattr(layer, self.added_weight_attrs[0]),
-                permute_scale,
-                weight_scale,
+                permute_scale_new,
+                weight_scale_new,
                 token_nums_per_expert,
                 up_gate_proj_out,
                 None,
@@ -657,14 +666,23 @@ class BlackwellGemmFusedMoeMethod(MoEMethodBase):
                 )
 
             act_out_fp8 = act_out_fp8.reshape([-1, act_out_fp8.shape[-1]])
-            act_out_fp8_scale = unpack_and_repeat_int32_to_uint8(scale)
-            weight2_scale = unpack_and_repeat_int32_to_uint8(getattr(layer, self.added_scale_attrs[1]))
+
+            act_out_fp8_scale = paddle.empty(
+                [scale.shape[0], scale.shape[1], scale.shape[-1] * 16], dtype=paddle.uint8
+            )
+            unpack_and_repeat_int32_to_uint8(scale, token_nums_per_expert, act_out_fp8_scale)
+
+            weight_scale = getattr(layer, self.added_scale_attrs[1])
+            weight_scale_new = paddle.empty(
+                [weight_scale.shape[0], weight_scale.shape[1], weight_scale.shape[-1] * 16], dtype=paddle.uint8
+            )
+            unpack_and_repeat_int32_to_uint8(weight_scale, None, weight_scale_new)
 
             group_gemm_masked(
                 act_out_fp8,
                 getattr(layer, self.added_weight_attrs[1]),
                 act_out_fp8_scale,
-                weight2_scale,
+                weight_scale_new,
                 token_nums_per_expert,
                 ffn_out,
                 None,
