@@ -1711,13 +1711,10 @@ class BlockWiseFP8MoEMethod(QuantMethodBase):
                 setattr(
                     layer,
                     scale_bw_name,
-                    layer.create_parameter(
-                        shape=scale_bw.shape,
-                        dtype=scale_bw.dtype,
-                        default_initializer=paddle.nn.initializer.Constant(0),
-                    ),
+                    scale_bw,
                 )
-                getattr(layer, scale_bw_name).copy_(scale_bw, False)
+                # getattr(layer, scale_bw_name).set_value(scale_bw.contiguous().clone())
+                # getattr(layer, scale_bw_name).copy_(scale_bw, False)
 
         if self.quant_config.is_checkpoint_bf16:
             # dynamic quantize

@@ -554,7 +554,6 @@ class BlackwellGemmFusedMoeMethod(MoEMethodBase):
                 layer.ep_size * max_tokens_per_rank,
                 -1,
             )
-
             act_out_fp8, scale = fastdeploy.model_executor.ops.gpu.fused_mask_swiglu_fp8_quant(
                 up_gate_proj_out,
                 token_nums_per_expert,
@@ -577,7 +576,6 @@ class BlackwellGemmFusedMoeMethod(MoEMethodBase):
             act_out_fp8 = act_out_fp8.reshape([-1, act_out_fp8.shape[-1]])
 
             act_out_fp8_scale = blackwell_ops.unpack_and_convert_scale(scale, token_nums_per_expert)
-
             group_gemm_masked(
                 act_out_fp8,
                 getattr(layer, self.added_weight_attrs[1]),
