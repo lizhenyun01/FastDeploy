@@ -26,7 +26,6 @@ from fastdeploy.platforms import current_platform
 if current_platform.is_cuda():
     from fastdeploy.model_executor.ops.gpu import per_token_group_fp8_quant
 
-import numpy as np
 
 from ..utils import get_sm_version
 
@@ -261,82 +260,3 @@ def fused_stack_transpose_quant(expert_weight_list, use_ue8m0=False):
         raise RuntimeError("'fuse_stack_transpose_fp8_quant' is not available in the current paddlefleet_ops.")
 
     return w, scale
-
-
-def reorder_sf_to_cutlass(sf_logical, mn_dim, kb_dim):
-    """
-    将逻辑布局的 scale factor (UE8M0 uint8) 重排为 CUTLASS SfAtom 交错布局。
-
-    CUTLASS Sm1xxBlockScaledConfig 要求 scale factor 按照 SfAtom 的特殊交错模式排列:
-      SfAtom shape: ((32, 4), (SFVecSize, 4))
-      SfAtom stride: ((16, 4), (0, 1))
-    即每 128 行的 MN 元素被分成 (32, 4) 的子块，并与 K 维度的 4 个 scale 交错存储。
-
-    参数:
-      sf_logical: 逻辑布局的 scale factor tensor, shape (..., mn_dim, kb_dim), dtype=uint8
-      mn_dim: M 或 N 维度大小
-      kb_dim: K // block_size (scale factor 的 K 维度)
-    返回:
-      重排后的 scale factor tensor, 相同 shape 和 dtype
-    """
-    sf_np = sf_logical.numpy()
-    orig_shape = sf_np.shape
-    flat = sf_np.reshape(-1, mn_dim, kb_dim)
-
-    # 向量化计算: 构建所有 (n, kb) 索引到 (n_phys, kb_phys) 的映射
-    n_idx = np.arange(mn_dim)
-    kb_idx = np.arange(kb_dim)
-    n_grid, kb_grid = np.meshgrid(n_idx, kb_idx, indexing="ij")  # (mn_dim, kb_dim)
-
-    n_tile = n_grid // 128
-    n_local = n_grid % 128
-    mn_i = n_local % 32
-    mn_j = n_local // 32
-    k_tile = kb_grid // 4
-    sf_l = kb_grid % 4
-    num_k_tiles = kb_dim // 4
-
-    cutlass_byte = (n_tile * num_k_tiles + k_tile) * 512 + mn_i * 16 + mn_j * 4 + sf_l
-    n_phys = cutlass_byte // kb_dim
-    kb_phys = cutlass_byte % kb_dim
-
-    # 用高级索引一次性完成重排
-    result = np.empty_like(flat)
-    result[:, n_phys, kb_phys] = flat[:, n_grid, kb_grid]
-
-    return paddle.to_tensor(result.reshape(orig_shape), dtype=paddle.uint8)
-
-
-def unpack_and_convert_scale(x, masked_m=None):
-    """
-    方案4：使用 tile 实现重复
-    """
-    if hasattr(x, "numpy"):
-        x_np = x.numpy()
-    else:
-        x_np = np.array(x)
-
-    e, m, n = x_np.shape
-
-    # 确保数组是连续的
-    if not x_np.flags["C_CONTIGUOUS"]:
-        x_np = np.ascontiguousarray(x_np)
-
-    # 将 int32 数组视为 uint8 数组（直接内存重解释）
-    x_uint8 = x_np.view(np.uint8).reshape(e, m, n, 4)
-
-    # 使用 repeat 重复每个值4次
-    # 先增加一个维度，然后 repeat
-    x_expanded = x_uint8[:, :, :, :, np.newaxis]  # [e, m, n, 4, 1]
-    x_repeated = np.repeat(x_expanded, 4, axis=-1)  # [e, m, n, 4, 4]
-
-    # 重新排列维度
-    x_reshaped = x_repeated.reshape(e, m, n, 16)
-
-    # 合并最后两维
-    output_np = x_reshaped.reshape(e, m, n * 16)
-
-    output = paddle.to_tensor(output_np, dtype=paddle.uint8)
-    output = reorder_sf_to_cutlass(output, m, n * 16)
-
-    return output
