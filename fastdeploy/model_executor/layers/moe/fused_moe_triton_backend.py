@@ -1713,8 +1713,12 @@ class BlockWiseFP8MoEMethod(QuantMethodBase):
                     scale_bw_name,
                     scale_bw,
                 )
-                # getattr(layer, scale_bw_name).set_value(scale_bw.contiguous().clone())
-                # getattr(layer, scale_bw_name).copy_(scale_bw, False)
+                if layer.fd_config.scheduler_config.splitwise_role != "mixed":
+                    setattr(
+                        layer,
+                        scale_name,
+                        None,
+                    )
 
         if self.quant_config.is_checkpoint_bf16:
             # dynamic quantize
