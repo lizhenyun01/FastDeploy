@@ -645,6 +645,7 @@ class BlackwellGemmFusedMoeMethod(MoEMethodBase):
         if topk_ids_hookfunc is not None:
             topk_ids_hookfunc(topk_ids=topk_idx)
 
+        print(f"block size:{self.quant_config.weight_block_size}")
         # 2. Dynamic compute blockwise quantization scales
         if not fastdeploy.envs.FD_USE_PHI_FP8_QUANT:
             x_fp8, x_scale_tensor = fastdeploy.model_executor.ops.gpu.per_token_quant(
@@ -767,6 +768,7 @@ class BlackwellGemmFusedMoeMethod(MoEMethodBase):
                 None,
                 layer.ep_size * max_tokens_per_rank,
                 -1,
+                "w8a8",
             )
             act_out_fp8, scale = fastdeploy.model_executor.ops.gpu.fused_mask_swiglu_fp8_quant(
                 up_gate_proj_out,
@@ -800,6 +802,7 @@ class BlackwellGemmFusedMoeMethod(MoEMethodBase):
                 None,
                 layer.ep_size * max_tokens_per_rank,
                 -1,
+                "w8a8",
             )
 
             tmp_ffn_out = call_depermute_prefill_combine(
@@ -1012,6 +1015,7 @@ class BlackwellGemmFusedMoeMethod(MoEMethodBase):
             None,
             layer.ep_size * layer.fd_config.model_config.num_max_dispatch_tokens_per_rank,
             -1,
+            "w8a8",
         )
 
         act_out_fp8, scale = fastdeploy.model_executor.ops.gpu.fused_mask_swiglu_fp8_quant(
@@ -1034,6 +1038,7 @@ class BlackwellGemmFusedMoeMethod(MoEMethodBase):
             None,
             layer.ep_size * layer.fd_config.model_config.num_max_dispatch_tokens_per_rank,
             -1,
+            "w8a8",
         )
 
         if shared_experts is not None:
