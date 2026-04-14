@@ -34,7 +34,6 @@ from fastdeploy.model_executor.layers.utils import get_tensor
 from fastdeploy.model_executor.ops.gpu import (
     count_tokens_per_expert_func,
     depermute_prefill_combine,
-    prefill_permute_to_masked_gemm,
 )
 from fastdeploy.model_executor.utils import (
     TensorTracker,
@@ -96,7 +95,10 @@ def call_prefill_permute_to_masked_gemm(
     if topk_ids.dtype != paddle.int64:
         topk_ids = topk_ids.cast(paddle.int64)
 
-    results = prefill_permute_to_masked_gemm(x, scale, topk_ids, num_local_experts, max_token_num)
+    # results = prefill_permute_to_masked_gemm(x, scale, topk_ids, num_local_experts, max_token_num)
+    results = blackwell_ops.prefill_permute_to_blackwell_masked_gemm(
+        x, scale, topk_ids, num_local_experts, max_token_num
+    )
 
     return results[0], results[1], results[2], results[3]
 
@@ -645,7 +647,6 @@ class BlackwellGemmFusedMoeMethod(MoEMethodBase):
         if topk_ids_hookfunc is not None:
             topk_ids_hookfunc(topk_ids=topk_idx)
 
-        print(f"block size:{self.quant_config.weight_block_size}")
         # 2. Dynamic compute blockwise quantization scales
         if not fastdeploy.envs.FD_USE_PHI_FP8_QUANT:
             x_fp8, x_scale_tensor = fastdeploy.model_executor.ops.gpu.per_token_quant(
@@ -738,16 +739,11 @@ class BlackwellGemmFusedMoeMethod(MoEMethodBase):
 
             up_gate_proj_out = paddle.empty(
                 [
-                    layer.num_local_experts,
-                    layer.ep_size * max_tokens_per_rank,
+                    layer.num_local_experts * layer.ep_size * max_tokens_per_rank,
                     layer.moe_intermediate_size * 2,
                 ],
                 dtype=paddle.bfloat16,
             )
-            permute_input = permute_input.reshape([-1, permute_input.shape[-1]])
-
-            permute_scale_new = blackwell_ops.unpack_and_convert_scale(permute_scale, token_nums_per_expert)
-
             # masked group gemm
             # a: [num_local_experts * expected_m, k]
             # b: [num_local_experts, n, k]
@@ -761,7 +757,7 @@ class BlackwellGemmFusedMoeMethod(MoEMethodBase):
             group_gemm_masked(
                 permute_input,
                 getattr(layer, self.added_weight_attrs[0]),
-                permute_scale_new,
+                permute_scale,
                 getattr(layer, self.added_scale_attrs[0]),
                 token_nums_per_expert,
                 up_gate_proj_out,
@@ -770,15 +766,13 @@ class BlackwellGemmFusedMoeMethod(MoEMethodBase):
                 -1,
                 "w8a8",
             )
-            act_out_fp8, scale = fastdeploy.model_executor.ops.gpu.fused_mask_swiglu_fp8_quant(
+            act_out_fp8, scale = blackwell_ops.fused_mask_swiglu_fp8_quant_blackwell(
                 up_gate_proj_out,
                 token_nums_per_expert,
-                self.quant_config.weight_block_size[0],
-                use_ue8m0=self.quant_config.deepgemm_scale_ue8m0,
             )
 
             if layer.hidden_size == layer.moe_intermediate_size * 2:
-                ffn_out = up_gate_proj_out
+                ffn_out = up_gate_proj_out.reshape([layer.num_local_experts, layer.ep_size * max_tokens_per_rank, -1])
             else:
                 ffn_out = paddle.empty(
                     [
@@ -789,13 +783,10 @@ class BlackwellGemmFusedMoeMethod(MoEMethodBase):
                     dtype=paddle.bfloat16,
                 )
 
-            act_out_fp8 = act_out_fp8.reshape([-1, act_out_fp8.shape[-1]])
-
-            act_out_fp8_scale = blackwell_ops.unpack_and_convert_scale(scale, token_nums_per_expert)
             group_gemm_masked(
                 act_out_fp8,
                 getattr(layer, self.added_weight_attrs[1]),
-                act_out_fp8_scale,
+                scale,
                 getattr(layer, self.added_scale_attrs[1]),  # weight_scale_new
                 token_nums_per_expert,
                 ffn_out,
@@ -986,8 +977,9 @@ class BlackwellGemmFusedMoeMethod(MoEMethodBase):
         assert isinstance(permute_input, tuple)
         up_gate_proj_out = paddle.empty(
             [
-                layer.num_local_experts,
-                layer.ep_size * layer.fd_config.model_config.num_max_dispatch_tokens_per_rank,
+                layer.num_local_experts
+                * layer.ep_size
+                * layer.fd_config.model_config.num_max_dispatch_tokens_per_rank,
                 layer.moe_intermediate_size * 2,
             ],
             dtype=paddle.bfloat16,
@@ -1001,7 +993,6 @@ class BlackwellGemmFusedMoeMethod(MoEMethodBase):
             ],
             dtype=paddle.bfloat16,
         )
-
         input_x = permute_input[0].reshape([-1, permute_input[0].shape[-1]])
 
         permute_scale_new = blackwell_ops.unpack_and_convert_scale(permute_input[1], token_nums_per_expert)
@@ -1018,20 +1009,15 @@ class BlackwellGemmFusedMoeMethod(MoEMethodBase):
             "w8a8",
         )
 
-        act_out_fp8, scale = fastdeploy.model_executor.ops.gpu.fused_mask_swiglu_fp8_quant(
+        act_out_fp8, scale = blackwell_ops.fused_mask_swiglu_fp8_quant_blackwell(
             up_gate_proj_out,
             token_nums_per_expert,
-            self.quant_config.weight_block_size[0],
-            use_ue8m0=self.quant_config.deepgemm_scale_ue8m0,
         )
-
-        act_out_fp8 = act_out_fp8.reshape([-1, act_out_fp8.shape[-1]])
-        act_out_fp8_scale = blackwell_ops.unpack_and_convert_scale(scale, token_nums_per_expert)
 
         group_gemm_masked(
             act_out_fp8,
             getattr(layer, self.added_weight_attrs[1]),
-            act_out_fp8_scale,
+            scale,
             getattr(layer, self.added_scale_attrs[1]),  # weight_scale_new
             token_nums_per_expert,
             ffn_out,
