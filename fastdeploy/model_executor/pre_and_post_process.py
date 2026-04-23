@@ -574,12 +574,12 @@ def save_output_specualate(
     sampler_output: SamplerOutput,
     model_output: ModelOutputData,
     share_inputs: InputBatch,
-    proposer_share_inputs: ProposerInputBatch,
     local_rank: int,
     tensor_parallel_rank: int,
     save_each_rank: bool = False,
     sampling_mask_async_queue: Optional[queue.Queue] = None,
     is_mtp_prefill: bool = False,
+    proposer_share_inputs: Optional[ProposerInputBatch] = None,
 ):
     # Resolve deferred async D2H: sync event once at the top so all paths below
     # can safely read sampling_mask and logz_per_batch.
@@ -601,6 +601,7 @@ def save_output_specualate(
         )
 
     if is_mtp_prefill:
+        assert proposer_share_inputs is not None
         if tensor_parallel_rank == 0:
             skip_chunk_prefill = bool(int(envs.ENABLE_V1_KVCACHE_SCHEDULER))
             if sampler_output.logprobs_tensors is None:

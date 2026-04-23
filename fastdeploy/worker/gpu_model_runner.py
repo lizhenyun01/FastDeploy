@@ -2526,7 +2526,6 @@ class GPUModelRunner(ModelRunnerBase):
                 sampler_output=sampler_output,
                 model_output=model_output_data,
                 share_inputs=self.share_inputs,
-                proposer_share_inputs=self.proposer.model_inputs,
                 local_rank=self.local_rank,
                 tensor_parallel_rank=self.parallel_config.tensor_parallel_rank,
                 save_each_rank=self.parallel_config.use_ep,
@@ -2534,6 +2533,7 @@ class GPUModelRunner(ModelRunnerBase):
                 is_mtp_prefill=(
                     self.spec_method == SpecMethod.MTP and self.scheduler_config.splitwise_role == "prefill"
                 ),
+                proposer_share_inputs=self.proposer.model_inputs if self.spec_method == SpecMethod.MTP else None,
             )
         else:
             save_output_normal(
