@@ -299,6 +299,13 @@ class PrefixCacheManager:
         else:
             storage_arg_str = " "
 
+        # Compute routing replay args for CTM — single JSON arg
+        routing_replay_config = getattr(self.config, "routing_replay_config", None)
+        if routing_replay_config is not None and routing_replay_config.enable_routing_replay:
+            routing_arg_str = f" --routing_replay_config '{routing_replay_config.to_json_string()}'"
+        else:
+            routing_arg_str = ""
+
         if self.cache_config.num_cpu_blocks > 0 or self.cache_config.kvcache_storage_backend:
             for i in range(tensor_parallel_size):
                 launch_cmd = (
@@ -330,6 +337,7 @@ class PrefixCacheManager:
                     + f" --write_policy {cache_config.write_policy}"
                     + f" --max_model_len {self.config.model_config.max_model_len}"
                     + f" --model_path {self.config.model_config.model}"
+                    + routing_arg_str
                     + f" >{log_dir}/launch_cache_transfer_manager_{int(device_ids[i])}.log 2>&1"
                 )
                 logger.info(f"Launch cache transfer manager, command:{launch_cmd}")

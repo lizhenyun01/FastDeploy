@@ -588,6 +588,7 @@ class OpenAIServingChat:
             sampling_mask_list = [[] for _ in range(num_choices)]
             speculate_metrics = [None for _ in range(num_choices)]
             choices = []
+            routing_data_result = None
             while num_choices > 0:
                 if self.engine_client.check_model_weight_status():
                     return ErrorResponse(
@@ -721,6 +722,15 @@ class OpenAIServingChat:
                             speculate_metrics=speculate_metrics[idx],
                         )
                         choices.append(choice)
+                        if data.get("routing_data") is not None:
+                            import base64
+
+                            import numpy as np
+
+                            rd = data["routing_data"]
+                            if not isinstance(rd, np.ndarray):
+                                rd = np.array(rd)
+                            routing_data_result = base64.b64encode(rd.tobytes()).decode("utf-8")
         finally:
             trace_print(LoggingEventName.POSTPROCESSING_END, request_id, getattr(request, "user", ""))
             tracing.trace_req_finish(request_id)
@@ -752,6 +762,7 @@ class OpenAIServingChat:
             model=model_name,
             choices=choices,
             usage=usage,
+            routed_experts=routing_data_result,
         )
         api_server_logger.info(f"Chat response: {res.model_dump_json()}")
         return res

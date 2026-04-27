@@ -68,6 +68,7 @@ class TestLLMEngineStopProfile(unittest.TestCase):
             parallel_config=types.SimpleNamespace(device_ids="0"),
             scheduler_config=types.SimpleNamespace(splitwise_role="decode"),
             cache_config=Mock(enable_prefix_caching=False, reset=Mock()),
+            routing_replay_config=types.SimpleNamespace(enable_routing_replay=False),
         )
         eng.engine = types.SimpleNamespace(
             start_cache_service=lambda *_: None,

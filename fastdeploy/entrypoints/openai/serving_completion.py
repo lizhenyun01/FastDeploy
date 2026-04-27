@@ -786,12 +786,24 @@ class OpenAIServingCompletion:
         )
         del request
 
+        routed_experts = None
+        if final_res_batch and final_res_batch[-1].get("routing_data") is not None:
+            import base64
+
+            import numpy as np
+
+            rd = final_res_batch[-1]["routing_data"]
+            if not isinstance(rd, np.ndarray):
+                rd = np.array(rd)
+            routed_experts = base64.b64encode(rd.tobytes()).decode("utf-8")
+
         return CompletionResponse(
             id=request_id,
             created=created_time,
             model=model_name,
             choices=choices,
             usage=usage,
+            routed_experts=routed_experts,
         )
 
     async def _call_process_response_dict(self, res, request, stream):

@@ -65,6 +65,7 @@ class Args:
     kvcache_storage_backend = None
     write_policy = "write_through"
     model_path = "test_model"
+    routing_replay_config = MagicMock(enable_routing_replay=False)
 
 
 # ==========================

@@ -146,8 +146,8 @@ class ForwardMeta:
     caches: Optional[list[paddle.Tensor]] = None
     # Flag of profile run
     is_dummy_or_profile_run: bool = False
-    # Routing Replay table buffer
-    routing_replay_table: Optional[paddle.Tensor] = None
+    # GPU transient routing buffer [max_num_batched_tokens, num_moe_layers, top_k]
+    gpu_routing_buffer: Optional[paddle.Tensor] = None
 
     # chunked MoE related
     moe_num_chunk: int = 1

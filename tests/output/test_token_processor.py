@@ -64,6 +64,7 @@ class _DummyCfg:
         )
         self.max_num_seqs = max_num_seqs
         self.splitwise_version = "v1"
+        self.routing_replay_config = types.SimpleNamespace(enable_routing_replay=False)
 
 
 class _DummyResourceManager:

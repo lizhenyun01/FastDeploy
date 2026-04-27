@@ -1026,6 +1026,7 @@ class RequestOutput:
         self.ic_req_data = ic_req_data
         self.prompt_token_ids_len = prompt_token_ids_len
         self.trace_carrier = trace_carrier
+        self.routing_data = None  # Optional[np.ndarray], [seq_len, num_moe_layers, top_k]
 
         if prompt_token_ids is None:
             self.prompt_token_ids = []
@@ -1121,12 +1122,15 @@ class RequestOutput:
             d.pop("metrics", None)
             metrics = None
         trace_carrier = d.pop("trace_carrier", {})
-        return RequestOutput(**d, outputs=completion_output, metrics=metrics, trace_carrier=trace_carrier)
+        routing_data = d.pop("routing_data", None)
+        obj = RequestOutput(**d, outputs=completion_output, metrics=metrics, trace_carrier=trace_carrier)
+        obj.routing_data = routing_data
+        return obj
 
     def to_dict(self):
         """convert RequestOutput into a serializable dict"""
 
-        return {
+        d = {
             "request_id": self.request_id,
             "prompt": self.prompt,
             "prompt_token_ids": self.prompt_token_ids,
@@ -1144,6 +1148,9 @@ class RequestOutput:
             "prompt_token_ids_len": self.prompt_token_ids_len,
             "trace_carrier": self.trace_carrier,
         }
+        if self.routing_data is not None:
+            d["routing_data"] = self.routing_data
+        return d
 
     def get(self, key: str, default_value=None):
         if hasattr(self, key):

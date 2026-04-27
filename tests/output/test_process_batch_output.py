@@ -65,6 +65,7 @@ class MockConfig:
     model_config = ModelConfig()
     scheduler_config = SchedulerConfig()
     cache_config = CacheConfig()
+    routing_replay_config = MagicMock(enable_routing_replay=False)
 
 
 class MockTask:

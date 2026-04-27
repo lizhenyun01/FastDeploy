@@ -140,6 +140,65 @@ class TokenProcessor:
         self.health_lock = threading.Lock()
         self.engine_output_token_hang = False
 
+        # Routing replay: attach to SharedMemory routing_host_buffer (lazy init after profiling)
+        self.routing_host_view = None
+        self._routing_host_view_init_attempted = False
+        self.routing_cache_manager = None  # Set by Engine after profiling for local/rdma store dispatch
+
+    def _init_routing_host_view(self):
+        """Attach to SharedMemory routing_host_buffer created by Engine. Called lazily."""
+        self._routing_host_view_init_attempted = True
+        if not self.cfg.routing_replay_config.enable_routing_replay:
+            return
+        try:
+            from fastdeploy.cache_manager.routing_cache_manager import (
+                RoutingHostBufferView,
+            )
+
+            rrc = self.cfg.routing_replay_config
+            cache_config = self.cfg.cache_config
+
+            dp_suffix = str(self.cfg.parallel_config.local_engine_worker_queue_port)
+            shm_name = f"routing_host_buffer.{dp_suffix}"
+            num_gpu_blocks = cache_config.total_block_num
+            max_num_kv_tokens = num_gpu_blocks * cache_config.block_size
+            shape = (max_num_kv_tokens, rrc.num_moe_layers, rrc.moe_top_k)
+
+            self.routing_host_view = RoutingHostBufferView(shape=shape, dtype=rrc.routing_dtype, shm_name=shm_name)
+            self._routing_block_size = cache_config.block_size
+            llm_logger.info(f"[R3] TokenProcessor attached to RoutingHostBuffer: {shm_name}")
+        except FileNotFoundError:
+            llm_logger.warning("[R3] RoutingHostBuffer SharedMemory not found, routing gather disabled.")
+        except Exception as e:
+            llm_logger.warning(f"[R3] Failed to attach to RoutingHostBuffer: {e}")
+
+    def _gather_routing_for_finished_request(self, task, seq_len: int):
+        """
+        Gather complete routing data for a finished request from routing_host_buffer.
+
+        Args:
+            task: Request task with block_tables
+            seq_len: Total sequence length
+
+        Returns:
+            numpy array [seq_len, num_moe_layers, top_k] or None
+        """
+        if self.routing_host_view is None and not self._routing_host_view_init_attempted:
+            self._init_routing_host_view()
+        if self.routing_host_view is None:
+            return None
+
+        import math
+
+        block_size = self._routing_block_size
+        block_ids = task.block_tables[: math.ceil(seq_len / block_size)]
+        positions = np.arange(seq_len)
+        block_indices = positions // block_size
+        offsets = positions % block_size
+        slot_mapping = np.array(block_ids)[block_indices] * block_size + offsets
+
+        return self.routing_host_view.gather(slot_mapping)
+
     def healthy(self):
         """
         whether token processor is healthy
@@ -274,6 +333,7 @@ class TokenProcessor:
                     self._compute_speculative_status()
                 if not is_prefill:
                     self._record_completion_metrics(task, current_time)
+                self._finalize_routing(task_id, task, result, is_prefill)
                 self._recycle_resources(task_id, batch_id, task, result, is_prefill)
                 break
         return result
@@ -337,6 +397,7 @@ class TokenProcessor:
                     prompt_token_ids=task.prompt_token_ids,
                     outputs=PoolingOutput(data=pooler_output),
                 )
+                self._finalize_routing(task_id, task, result, False)
                 self._recycle_resources(task_id, i, task, result, False)
                 batch_result.append(result)
             else:
@@ -522,6 +583,47 @@ class TokenProcessor:
                 self.cached_generated_tokens.put_results(batch_result)
         except Exception as e:
             llm_logger.error(f"Error in TokenProcessor's postprocess: {e}, {str(traceback.format_exc())}")
+
+    def _finalize_routing(self, task_id, task, result, is_prefill=False):
+        """
+        Gather routing data before blocks are freed.
+        Must be called before _recycle_resources so that block_tables are still valid.
+
+        - PD P node (is_prefill=True): gather prefill-only routing, attach to result for sending to D.
+        - Non-PD / D node (result.finished): gather full routing (prompt + output),
+          either attach to result ("response" mode) or dispatch to store ("local"/"rdma" mode).
+        """
+        if not self.cfg.routing_replay_config.enable_routing_replay:
+            return
+        if result is None:
+            return
+
+        try:
+            if is_prefill:
+                if result.error_code == 200:
+                    seq_len = task.prompt_token_ids_len
+                    routing_data = self._gather_routing_for_finished_request(task, seq_len)
+                    if routing_data is not None:
+                        result.routing_data = routing_data
+            elif result.finished:
+                store_type = self.cfg.routing_replay_config.routing_store_type
+                seq_len = (
+                    task.prompt_token_ids_len + len(task.output_token_ids)
+                    if hasattr(task, "output_token_ids")
+                    else task.prompt_token_ids_len
+                )
+                if store_type == "response":
+                    routing_data = self._gather_routing_for_finished_request(task, seq_len)
+                    if routing_data is not None:
+                        result.routing_data = routing_data
+                elif self.routing_cache_manager is not None:
+                    self.routing_cache_manager.on_request_finished(
+                        request_id=task_id,
+                        block_table=task.block_tables,
+                        seq_len=seq_len,
+                    )
+        except Exception as e:
+            llm_logger.warning(f"[R3] Failed to finalize routing for {task_id}: {e}")
 
     def _recycle_resources(self, task_id, index, task, result=None, is_prefill=False):
         """
@@ -981,6 +1083,7 @@ class TokenProcessor:
                         self.resource_manager.cache_output_tokens(
                             task
                         )  # when enable prefix caching, cache kv cache for output tokens
+                    self._finalize_routing(task_id, task, result, is_prefill)
                     self._recycle_resources(task_id, i, task, result, is_prefill)
                     llm_logger.info(f"eos token {task_id} Recycle end.")
                     break
@@ -1102,6 +1205,7 @@ class TokenProcessor:
                 ),
             )
             is_prefill = task.disaggregate_info is not None and task.disaggregate_info["role"] == "prefill"
+            self._finalize_routing(task.request_id, task, result, is_prefill)
             self._recycle_resources(task.request_id, i, task, result, is_prefill)
             llm_logger.warning(f"clear data for task {task.request_id}")
 

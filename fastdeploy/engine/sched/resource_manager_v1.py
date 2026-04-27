@@ -209,6 +209,8 @@ class ResourceManagerV1(ResourceManager):
             self.encoder_cache = EncoderCacheManager(config.cache_config.max_encoder_cache)
 
         self.processor_cache = None
+        self.routing_host_view = None  # Set by Engine after RoutingHostBuffer creation
+
         if config.enable_mm_runtime and config.cache_config.max_processor_cache > 0:
             max_processor_cache_in_bytes = int(config.cache_config.max_processor_cache * 1024 * 1024 * 1024)
             self.processor_cache = ProcessorCacheManager(max_processor_cache_in_bytes)
@@ -1490,8 +1492,37 @@ class ResourceManagerV1(ResourceManager):
             request.metrics.decode_inference_start_time = time.time()
             request.metrics.update_decoder_start_time()
 
+            # [R3] Write P's prefill routing data into D's routing_host_buffer
+            if (
+                self.routing_host_view is not None
+                and hasattr(request_output, "routing_data")
+                and request_output.routing_data is not None
+            ):
+                try:
+                    self._write_prefill_routing_to_host_buffer(request, request_output.routing_data)
+                except Exception as e:
+                    llm_logger.warning(f"[R3] Failed to write prefill routing for {request_output.request_id}: {e}")
+
             self.tasks_list[request.idx] = request
             self.running.append(request)
+
+    def _write_prefill_routing_to_host_buffer(self, request, routing_data):
+        """
+        Write P's prefill routing data into D's routing_host_buffer.
+        Uses D's block_tables to compute slot_mapping.
+        """
+        import math
+
+        seq_len = routing_data.shape[0]
+        block_size = self.config.cache_config.block_size
+        num_blocks_needed = math.ceil(seq_len / block_size)
+        block_ids = request.block_tables[:num_blocks_needed]
+
+        positions = np.arange(seq_len)
+        block_indices = positions // block_size
+        offsets = positions % block_size
+        slot_mapping = np.array(block_ids)[block_indices] * block_size + offsets
+        self.routing_host_view.scatter(slot_mapping, routing_data)
 
     def _free_blocks(self, request: Request):
         if self.config.cache_config.enable_prefix_caching and self.config.scheduler_config.splitwise_role != "decode":

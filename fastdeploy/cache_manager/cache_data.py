@@ -14,11 +14,33 @@
 # limitations under the License.
 """
 
+from dataclasses import dataclass
 from enum import Enum
+from typing import Any, Optional
 
 from fastdeploy.utils import get_logger
 
 logger = get_logger("prefix_cache_manager", "cache_manager.log")
+
+
+@dataclass
+class AuxBlockDataSpec:
+    """
+    Describes a type of auxiliary data bound to KVCache blocks.
+    CacheTransferManager iterates registered specs during swap/storage
+    to perform corresponding data transfers.
+    """
+
+    name: str
+    num_layers: int
+    per_token_size: int = 0
+    block_size: int = 0
+    dtype: str = "uint8"
+    swap_buffer: Optional[Any] = None
+    enabled: bool = True
+
+    def get_storage_key(self, key_prefix: str, block_hash: str, rank: int) -> str:
+        return f"prefix{key_prefix}_{block_hash}_{rank}_{self.name}"
 
 
 class CacheStatus(Enum):
@@ -56,6 +78,7 @@ class BlockNode:
         cache_status=CacheStatus.GPU,
         is_persistent=False,
         persistent_shared_count=0,
+        aux_data_names=None,
     ):
         """
         Args:
@@ -89,6 +112,7 @@ class BlockNode:
         self.cache_status = cache_status
         self.is_persistent = is_persistent
         self.persistent_shared_count = persistent_shared_count
+        self.aux_data_names = aux_data_names or []
         self.req_id_set = set()
 
     def __lt__(self, other):
@@ -102,7 +126,7 @@ class BlockNode:
         else:
             return self.depth > other.depth
 
-    def __str__(self):
+    def __str__(self) -> str:
         """
         return node info
         """

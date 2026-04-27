@@ -143,6 +143,12 @@ class LLMEngine:
         self.engine.create_data_processor()
         self.data_processor = self.engine.data_processor
 
+        # Create RoutingCacheManager when skipping profiling (num_gpu_blocks_override is set)
+        if not self.do_profile and self.cfg.routing_replay_config.enable_routing_replay:
+            num_gpu_blocks = self.cfg.cache_config.num_gpu_blocks_override
+            if num_gpu_blocks is not None:
+                self.engine._init_routing_cache_manager(num_gpu_blocks)
+
         # If block numer is specified and model is deployed in mixed mode, start cache manager first
         if not self.do_profile and self.cfg.scheduler_config.splitwise_role != "mixed":
             if not current_platform.is_intel_hpu():
@@ -458,6 +464,11 @@ class LLMEngine:
         if hasattr(self, "zmq_server") and self.zmq_server is not None:
             self.zmq_server.close()
 
+        if hasattr(self, "engine") and hasattr(self.engine, "routing_cache_manager"):
+            if self.engine.routing_cache_manager is not None:
+                self.engine.routing_cache_manager.close()
+                self.engine.routing_cache_manager = None
+
         if hasattr(self, "dp_processed"):
             for p in self.dp_processed:
                 console_logger.info(f"Waiting for worker {p.pid} to exit")
@@ -763,6 +774,11 @@ class LLMEngine:
         num_gpu_blocks = self.get_profile_block_num_signal.value[0]
         self.cfg.cache_config.reset(num_gpu_blocks)
         self.engine.resource_manager.reset_cache_config(self.cfg.cache_config)
+
+        # Create RoutingCacheManager (SharedMemory) before starting cache service
+        if self.cfg.routing_replay_config.enable_routing_replay:
+            self.engine._init_routing_cache_manager(num_gpu_blocks)
+
         if self.cfg.cache_config.enable_prefix_caching or self.cfg.scheduler_config.splitwise_role != "mixed":
             if not current_platform.is_intel_hpu():
                 device_ids = self.cfg.parallel_config.device_ids.split(",")

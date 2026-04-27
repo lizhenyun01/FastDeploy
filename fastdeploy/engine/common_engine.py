@@ -2552,9 +2552,46 @@ class EngineService:
         num_gpu_blocks = self.get_profile_block_num_signal.value[0]
         self.cfg.cache_config.reset(num_gpu_blocks)
         self.resource_manager.reset_cache_config(self.cfg.cache_config)
+
+        # Create RoutingCacheManager (SharedMemory) after num_gpu_blocks is known
+        self.routing_cache_manager = None
+        if self.cfg.routing_replay_config.enable_routing_replay:
+            self._init_routing_cache_manager(num_gpu_blocks)
+
         if self.cfg.cache_config.enable_prefix_caching or self.cfg.scheduler_config.splitwise_role != "mixed":
             device_ids = self.cfg.parallel_config.device_ids.split(",")
             self.cache_manager_processes = self.start_cache_service(device_ids, self.ipc_signal_suffix)
+
+    def _init_routing_cache_manager(self, num_gpu_blocks: int):
+        """Create RoutingCacheManager (includes SharedMemory host buffer) after profiling."""
+        from fastdeploy.cache_manager.routing_cache_manager import (
+            RoutingCacheManager,
+            RoutingHostBufferView,
+        )
+
+        self.routing_cache_manager = RoutingCacheManager(
+            fd_config=self.cfg,
+            num_gpu_blocks=num_gpu_blocks,
+        )
+
+        # Pass routing_cache_manager to TokenProcessor for local/rdma store dispatch
+        self.token_processor.routing_cache_manager = self.routing_cache_manager
+
+        # Set routing_host_view on resource_manager for PD disaggregation (D side)
+        if hasattr(self, "resource_manager") and hasattr(self.resource_manager, "routing_host_view"):
+            rrc = self.cfg.routing_replay_config
+            dp_suffix = str(self.cfg.parallel_config.local_engine_worker_queue_port)
+            shm_name = f"routing_host_buffer.{dp_suffix}"
+            max_num_kv_tokens = num_gpu_blocks * self.cfg.cache_config.block_size
+            shape = (max_num_kv_tokens, rrc.num_moe_layers, rrc.moe_top_k)
+            try:
+                self.resource_manager.routing_host_view = RoutingHostBufferView(
+                    shape=shape, dtype=rrc.routing_dtype, shm_name=shm_name
+                )
+            except FileNotFoundError:
+                self.llm_logger.warning(
+                    f"[R3] RoutingHostBuffer SharedMemory {shm_name} not found for resource_manager"
+                )
 
     def check_health(self, time_interval_threashold=30):
         """
