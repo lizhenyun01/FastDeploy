@@ -132,7 +132,8 @@ class RoutedExpertsCapturer:
         max_num_kv_tokens = total_block_num * self.fd_config.cache_config.block_size
 
         # Small GPU transient buffer: only current step's token routing
-        max_num_batched_tokens = self.fd_config.scheduler_config.max_num_batched_tokens
+        # TODO(Chengyanfu): Use max_num_batched_tokens to replace get_max_chunk_tokens()
+        max_num_batched_tokens = self.fd_config.get_max_chunk_tokens()
         self.gpu_routing_buffer = paddle.full(
             shape=[max_num_batched_tokens, self.num_moe_layers, self.moe_top_k],
             fill_value=-1,
@@ -218,7 +219,7 @@ class RoutedExpertsCapturer:
 
         positions = []
         for i in range(seq_lens_this_time.shape[0]):
-            if seq_lens_this_time[i] == 0:
+            if increase_num[i] == 0:
                 positions.append([])
                 continue
             repeated_base = np.repeat(starts[i], increase_num[i])

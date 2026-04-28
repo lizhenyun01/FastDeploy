@@ -2449,7 +2449,7 @@ class FDConfig:
         )
         reset_value(self.cache_config, "cache_dtype", "infer_model_dtype")
 
-    def get_max_chunk_tokens(self, mm_max_tokens_per_item=None):
+    def get_max_chunk_tokens(self, mm_max_tokens_per_item=None) -> int:
         """
         get max chunk tokens
 
