@@ -375,15 +375,15 @@ class DeepGemmFusedMoeMethod(MoEMethodBase):
         if self.ep_prefill_runner.num_worst_tokens <= 0:
             let_another_thread_run()
         # 3. EP Dispatch
-        (
-            recv_x,
-            recv_topk_idx,
-            recv_topk_weights,
-            recv_num_tokens_per_expert_list,
-            handle,
-            event,
-        ) = self.ep_prefill_runner.dispatch(
-            x_fp8, topk_idx, topk_weights, x_scale_tensor=x_scale_tensor, expert_alignment=128, previous_event=event
+        (recv_x, recv_topk_idx, recv_topk_weights, recv_num_tokens_per_expert_list, handle, event, _, _) = (
+            self.ep_prefill_runner.dispatch(
+                x_fp8,
+                topk_idx,
+                topk_weights,
+                x_scale_tensor=x_scale_tensor,
+                expert_alignment=128,
+                previous_event=event,
+            )
         )
 
         if self.ep_prefill_runner.num_worst_tokens > 0:
