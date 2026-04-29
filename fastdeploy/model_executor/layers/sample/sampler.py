@@ -908,9 +908,7 @@ class SpeculativeSampler(nn.Layer):
         if top_p_logprob is not None:
             last_logprobs = paddle.where(top_p_token_mask, top_p_logprob, last_logprobs)
 
-        # NOTE(huicongyao) temporarily used for slice last_logprobs to its real shape, remove in the future
-        real_token_num = batch_token_num.sum().item()
-        return last_logprobs[:real_token_num]
+        return last_logprobs
 
     def gather_logprobs(
         self,
@@ -1238,10 +1236,13 @@ class SpeculativeSampler(nn.Layer):
             )
             sampler_output.logprobs_tensors = logprobs_tensors
             if cu_batch_token_offset is not None:
-                sampler_output.cu_batch_token_offset = cu_batch_token_offset.cpu()
+                cu_batch_token_offset_cpu = paddle.empty_like(cu_batch_token_offset, device="cpu").pin_memory()
+                cu_batch_token_offset_cpu.copy_(cu_batch_token_offset, False)
+                sampler_output.cu_batch_token_offset = cu_batch_token_offset_cpu
             if keep_sampling_mask:
                 real_bsz = share_inputs["seq_lens_this_time"].shape[0]
                 accept_nums = share_inputs["accept_num"][:real_bsz].reshape([-1])
+                target_logits = target_logits[: accept_nums.sum()]
                 # Derive target probs from already-extracted target_logits; avoids a second kernel call.
                 target_probs = F.softmax(target_logits, axis=-1)
                 # Compute sampling mask at accepted token positions.

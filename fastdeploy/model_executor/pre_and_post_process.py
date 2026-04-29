@@ -585,6 +585,14 @@ def save_output_speculate(
 
     # Renormalize logprobs with logz (deferred from post_process for better overlap).
     if sampler_output.logprobs_tensors is not None and sampler_output.logz_per_batch is not None:
+        # TODO (wangyanpeng): Currently, there is a bug when overlap is enabled.
+        # Please ensure overlap is disabled when using this functionality to avoid unexpected behavior.
+        real_token_num = share_inputs["accept_num_cpu"].sum()
+        sampler_output.logprobs_tensors = LogprobsTensors(
+            logprob_token_ids=sampler_output.logprobs_tensors.logprob_token_ids[:real_token_num],
+            logprobs=sampler_output.logprobs_tensors.logprobs[:real_token_num],
+            selected_token_ranks=sampler_output.logprobs_tensors.selected_token_ranks[:real_token_num],
+        )
         sampler_output.logprobs_tensors = logprobs_renormalize_with_logz(
             sampler_output.logprobs_tensors.logprobs,
             sampler_output.logz_per_batch,
