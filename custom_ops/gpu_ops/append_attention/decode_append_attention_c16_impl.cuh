@@ -272,10 +272,10 @@ __global__ void decode_append_attention_c16_kernel(
     }
     wait_group<0>();
     __syncthreads();
-    if (num_chunks_this_seq > 1) {
-      merge_block_res<num_frags_x, num_frags_y, T>(
-          o_frag, reinterpret_cast<float *>(smem), m_frag, d_frag, wid, tid);
-    } else {
+    merge_block_res<num_frags_x, num_frags_y, T>(
+        o_frag, reinterpret_cast<float *>(smem), m_frag, d_frag, wid, tid);
+
+    if (num_chunks_this_seq <= 1) {
       normalize_d<num_frags_x, num_frags_y>(o_frag, d_frag);
     }
 
