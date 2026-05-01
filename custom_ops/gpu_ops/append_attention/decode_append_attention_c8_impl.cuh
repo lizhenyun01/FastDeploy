@@ -88,16 +88,17 @@ __global__ void decode_append_attention_c8_kernel(
        lane_idx += gridDim.x) {
     // block_indices: shape [block_num,4], block's indices with 4
     // dimension[batch_idx, kv_head_idx, kv_chunk_idx, q_tile_idx]
-    int batch_idx = params.block_indices[lane_idx * 4];
-    int kv_head_idx = params.block_indices[lane_idx * 4 + 1];
-    int chunk_idx = params.block_indices[lane_idx * 4 + 2];
-    int tile_idx = params.block_indices[lane_idx * 4 + 3];
+    int4 indices =
+        reinterpret_cast<const int4 *>(params.block_indices)[lane_idx];
+    int batch_idx = indices.x;
+    int kv_head_idx = indices.y;
+    int chunk_idx = indices.z;
+    int tile_idx = indices.w;
     int q_head_idx = kv_head_idx * GROUP_SIZE;
 
     const uint32_t q_len = params.seq_lens_q[batch_idx];
-    if (q_len <= 0) {
-      continue;
-    }
+    // q_len > 0 and kv_len > 0 are guaranteed by config_decode_attn,
+    // which only generates block_indices entries for valid batches.
     const int *block_table_now =
         params.block_table + batch_idx * params.max_blocks_per_seq;
 
@@ -130,19 +131,11 @@ __global__ void decode_append_attention_c8_kernel(
         cache_v_scale_reg[0] = params.cache_v_scale[kv_head_idx];
       }
     }
-    const uint32_t num_rows_per_block = num_frags_x * 16;
+    constexpr uint32_t num_rows_per_block = num_frags_x * 16;
     const uint32_t q_end =
         min(q_len, div_up((tile_idx + 1) * num_rows_per_block, GROUP_SIZE));
-    uint32_t kv_len = params.seq_lens_kv[batch_idx];
-
-    if (kv_len <= 0) {
-      continue;
-    }
-    kv_len += q_len;
+    const uint32_t kv_len = params.seq_lens_kv[batch_idx] + q_len;
     const uint32_t num_chunks_this_seq = div_up(kv_len, chunk_size);
-    if (chunk_idx >= num_chunks_this_seq) {
-      continue;
-    }
 
     // 相关const变量
     // barrier::arrival_token tokens[4];
@@ -189,6 +182,10 @@ __global__ void decode_append_attention_c8_kernel(
                    tid % 8 * num_elems_per_128b<T>();
     const int *mask_offset_this_seq =
         params.mask_offset ? params.mask_offset + q_start_seq_id * 2 : nullptr;
+    const bool *attn_mask_this_seq =
+        params.attn_mask ? params.attn_mask + batch_idx * params.attn_mask_len *
+                                                  params.attn_mask_len
+                         : nullptr;
 
     uint32_t q_smem_offset_r = smem_t::get_permuted_offset<num_vecs_per_head>(
         tid % 16, tid / 16);  // 16 * 16
@@ -409,11 +406,7 @@ __global__ void decode_append_attention_c8_kernel(
                NUM_WARPS,
                num_frags_x,
                num_frags_y,
-               num_frags_z>(params.attn_mask
-                                ? params.attn_mask + batch_idx *
-                                                         params.attn_mask_len *
-                                                         params.attn_mask_len
-                                : nullptr,
+               num_frags_z>(attn_mask_this_seq,
                             q_base_seq_id_this_block,
                             kv_idx_base + wid * num_frags_z * 16,
                             q_len,
@@ -799,7 +792,7 @@ void DecodeAppendC8Attention(const AppendAttnMetaData &meta_data,
 
   dim3 grids(
       sm_cout *
-      2);  // TODO(lizhenyun): tuning optimal gridx to  while num_frags_x == 2
+      8);  // Match config_gridx for better parallelism with large workloads
   dim3 blocks(32, NUM_WARPS_PER_BLOCK);
 
   // auto cache_k_dim = cache_k.dims();

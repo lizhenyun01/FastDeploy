@@ -273,7 +273,7 @@ void ConfigForAttention(
     int sm_cout;
     CUDA_CHECK(cudaDeviceGetAttribute(
         &sm_cout, cudaDevAttrMultiProcessorCount, device));
-    const int config_gridx = sm_cout * 2;
+    const int config_gridx = sm_cout * 8;
 
     // 选择最优的q_tile_size
     int q_tile_size = 32;

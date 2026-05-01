@@ -40,32 +40,25 @@ __global__ void decode_append_attention_c16_kernel(
 
   for (int lane_idx = blockIdx.x; lane_idx < total_block;
        lane_idx += gridDim.x) {
-    int batch_idx = params.block_indices[lane_idx * 4];
-    int kv_head_idx = params.block_indices[lane_idx * 4 + 1];
-    int chunk_idx = params.block_indices[lane_idx * 4 + 2];
-    int tile_idx = params.block_indices[lane_idx * 4 + 3];
+    int4 indices =
+        reinterpret_cast<const int4 *>(params.block_indices)[lane_idx];
+    int batch_idx = indices.x;
+    int kv_head_idx = indices.y;
+    int chunk_idx = indices.z;
+    int tile_idx = indices.w;
     int q_head_idx = kv_head_idx * GROUP_SIZE;
 
     const uint32_t q_len = params.seq_lens_q[batch_idx];
-    if (q_len <= 0) {
-      continue;
-    }
+    // q_len > 0 and kv_len > 0 are guaranteed by config_decode_attn,
+    // which only generates block_indices entries for valid batches.
     const int *block_table_now =
         params.block_table + batch_idx * params.max_blocks_per_seq;
 
-    const uint32_t num_rows_per_block = num_frags_x * 16;
+    constexpr uint32_t num_rows_per_block = num_frags_x * 16;
     const uint32_t q_end =
         min(q_len, div_up((tile_idx + 1) * num_rows_per_block, GROUP_SIZE));
-    uint32_t kv_len = params.seq_lens_kv[batch_idx];
-
-    if (kv_len <= 0) {
-      continue;
-    }
-    kv_len += q_len;
+    const uint32_t kv_len = params.seq_lens_kv[batch_idx] + q_len;
     const uint32_t num_chunks_this_seq = div_up(kv_len, chunk_size);
-    if (chunk_idx >= num_chunks_this_seq) {
-      continue;
-    }
 
     constexpr uint32_t num_vecs_per_head = HEAD_DIM / num_elems_per_128b<T>();
 
@@ -103,6 +96,10 @@ __global__ void decode_append_attention_c16_kernel(
                    tid % 8 * num_elems_per_128b<T>();
     const int *mask_offset_this_seq =
         params.mask_offset ? params.mask_offset + q_start_seq_id * 2 : nullptr;
+    const bool *attn_mask_this_seq =
+        params.attn_mask ? params.attn_mask + batch_idx * params.attn_mask_len *
+                                                  params.attn_mask_len
+                         : nullptr;
 
     uint32_t q_smem_offset_r =
         smem_t::get_permuted_offset<num_vecs_per_head>(tid % 16, tid / 16);
@@ -148,8 +145,16 @@ __global__ void decode_append_attention_c16_kernel(
     uint32_t kv_smem_offset_w = smem_t::get_permuted_offset<num_vecs_per_head>(
         wid * 4 + tid / 8, tid % 8);
 
-    uint32_t kv_idx_base = chunk_start;
-    int block_id = __ldg(&block_table_now[kv_idx_base / BLOCK_SIZE]);
+    uint32_t kv_idx = chunk_start;
+    // block_table_idx tracks kv_idx / BLOCK_SIZE; since kv_idx increments by
+    // BLOCK_SIZE each iteration, block_table_idx simply increments by 1.
+    int block_table_idx = kv_idx / BLOCK_SIZE;
+    int block_id = __ldg(&block_table_now[block_table_idx]);
+    // Prefetch next block_id to overlap __ldg latency with compute_qk.
+    int block_id_next = __ldg(&block_table_now[block_table_idx + 1]);
+    if (block_id_next < 0) {
+      block_id_next = 0;
+    }
     const uint32_t const_offset = kv_head_idx * kv_h_stride +
                                   (wid * 4 + tid / 8) * kv_b_stride +
                                   tid % 8 * num_elems_per_128b<T>();
@@ -164,11 +169,8 @@ __global__ void decode_append_attention_c16_kernel(
                          NUM_WARP_Q>(k_smem,
                                      &kv_smem_offset_w,
                                      &cache_k_now,
-                                     kv_head_idx,
-                                     kv_n_stride,
-                                     kv_h_stride,
                                      kv_b_stride,
-                                     kv_idx_base,
+                                     kv_idx,
                                      chunk_end);
     commit_group();
 
@@ -180,15 +182,22 @@ __global__ void decode_append_attention_c16_kernel(
                          NUM_WARP_Q>(v_smem,
                                      &kv_smem_offset_w,
                                      &cache_v_now,
-                                     kv_head_idx,
-                                     kv_n_stride,
-                                     kv_h_stride,
                                      kv_b_stride,
-                                     kv_idx_base,
+                                     kv_idx,
                                      chunk_end);
     commit_group();
 #pragma unroll 1
     for (uint32_t iter = 0; iter < num_iterations; ++iter) {
+      // Prefetch block_id for next iteration's K/V loading.
+      // block_table_idx increments by 1 each iteration since kv_idx
+      // increments by BLOCK_SIZE, avoiding integer division in the loop.
+      if (iter + 1 < num_iterations) {
+        block_id_next = __ldg(&block_table_now[block_table_idx + 1]);
+        if (block_id_next < 0) {
+          block_id_next = 0;
+        }
+      }
+
       wait_group<1>();
       __syncthreads();
 
@@ -203,13 +212,9 @@ __global__ void decode_append_attention_c16_kernel(
                NUM_WARPS,
                num_frags_x,
                num_frags_y,
-               num_frags_z>(params.attn_mask
-                                ? params.attn_mask + batch_idx *
-                                                         params.attn_mask_len *
-                                                         params.attn_mask_len
-                                : nullptr,
+               num_frags_z>(attn_mask_this_seq,
                             q_base_seq_id_this_block,
-                            kv_idx_base + wid * num_frags_z * 16,
+                            kv_idx + wid * num_frags_z * 16,
                             q_len,
                             kv_len,
                             chunk_end,
@@ -224,11 +229,12 @@ __global__ void decode_append_attention_c16_kernel(
           s_frag, o_frag, m_frag, d_frag);
       __syncthreads();
 
-      kv_idx_base += BLOCK_SIZE;
-      block_id = __ldg(&block_table_now[kv_idx_base / BLOCK_SIZE]);
-      if (block_id < 0) {
-        block_id = 0;
-      }
+      // Advance kv_idx and block_table_idx for next iteration.
+      kv_idx += BLOCK_SIZE;
+      block_table_idx++;
+
+      // Load K/V for next iteration using prefetched block_id
+      block_id = block_id_next;
       cache_k_now = params.cache_k + block_id * kv_n_stride + const_offset;
       produce_kv_blockwise<SharedMemFillMode::kNoFill,
                            NUM_WARPS,
@@ -238,11 +244,8 @@ __global__ void decode_append_attention_c16_kernel(
                            NUM_WARP_Q>(k_smem,
                                        &kv_smem_offset_w,
                                        &cache_k_now,
-                                       kv_head_idx,
-                                       kv_n_stride,
-                                       kv_h_stride,
                                        kv_b_stride,
-                                       kv_idx_base,
+                                       kv_idx,
                                        chunk_end);
       commit_group();
       wait_group<1>();
@@ -262,20 +265,17 @@ __global__ void decode_append_attention_c16_kernel(
                            NUM_WARP_Q>(v_smem,
                                        &kv_smem_offset_w,
                                        &cache_v_now,
-                                       kv_head_idx,
-                                       kv_n_stride,
-                                       kv_h_stride,
                                        kv_b_stride,
-                                       kv_idx_base,
+                                       kv_idx,
                                        chunk_end);
       commit_group();
     }
     wait_group<0>();
     __syncthreads();
-    merge_block_res<num_frags_x, num_frags_y, T>(
-        o_frag, reinterpret_cast<float *>(smem), m_frag, d_frag, wid, tid);
-
-    if (num_chunks_this_seq <= 1) {
+    if (num_chunks_this_seq > 1) {
+      merge_block_res<num_frags_x, num_frags_y, T>(
+          o_frag, reinterpret_cast<float *>(smem), m_frag, d_frag, wid, tid);
+    } else {
       normalize_d<num_frags_x, num_frags_y>(o_frag, d_frag);
     }
 
@@ -441,7 +441,7 @@ void DecodeAppendC16Attention(const AppendAttnMetaData &meta_data,
   CUDA_CHECK(
       cudaDeviceGetAttribute(&sm_cout, cudaDevAttrMultiProcessorCount, device));
 
-  dim3 grids(sm_cout * 2);
+  dim3 grids(sm_cout * 8);
   dim3 blocks(32, NUM_WARPS_PER_BLOCK);
 
   launchWithPdlWhenEnabled(

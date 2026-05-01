@@ -424,10 +424,9 @@ __device__ __forceinline__ void mask_s(const bool* attn_mask,
                                 8 * (reg_id / 4) + reg_id % 2;
         bool out_of_boundary;
         if (mask_offset) {
-          out_of_boundary = q_idx < qo_len
-                                ? (kv_idx >= mask_offset[q_idx * 2 + 1] ||
-                                   kv_idx < mask_offset[q_idx * 2])
-                                : true;
+          const int2 mo = reinterpret_cast<const int2*>(mask_offset)[q_idx];
+          out_of_boundary =
+              q_idx < qo_len ? (kv_idx >= mo.y || kv_idx < mo.x) : true;
         } else if (sliding_window > 0) {
           bool out_of_window = int(kv_idx) <= (int)kv_len + (int)q_idx -
                                                   (int)qo_len - sliding_window;
@@ -880,9 +879,6 @@ template <SharedMemFillMode fill_mode,
 __device__ __forceinline__ void produce_kv_blockwise(smem_t smem,
                                                      uint32_t* smem_offset,
                                                      T** gptr,
-                                                     const uint32_t kv_head_idx,
-                                                     const uint32_t kv_n_stride,
-                                                     const uint32_t kv_h_stride,
                                                      const uint32_t kv_b_stride,
                                                      const uint32_t kv_idx_base,
                                                      const uint32_t kv_len) {
