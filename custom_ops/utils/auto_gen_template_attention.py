@@ -76,9 +76,8 @@ class UniversalTemplateInstantiator:
         return f"<{', '.join(template_args_parts)}>"
 
     def _build_params_template_args(self, params: Dict[str, Any]) -> str:
-        """Build template arguments."""
+        """Build template arguments for AttentionParams."""
         params_template_args = []
-        # breakpoint()
         if "T" in params:
             params_template_args.append(str(params["T"]))
         else:
@@ -87,7 +86,8 @@ class UniversalTemplateInstantiator:
         if "CacheT" in params:
             params_template_args.append(str(params["CacheT"]))
         else:
-            raise ValueError("Template parameter 'CacheT' not found in dispatch_params")
+            # C16 kernels use AttentionParams<T, T> - T is repeated for both args
+            params_template_args.append(str(params["T"]))
 
         return f"<{', '.join(params_template_args)}>"
 

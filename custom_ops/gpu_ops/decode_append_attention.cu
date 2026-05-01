@@ -13,6 +13,7 @@
 // limitations under the License.
 
 #include "append_attention/decode_append_attention_c8_impl.cuh"
+#include "append_attention/decode_append_attention_c16_impl.cuh"
 
 #ifndef PD_BUILD_STATIC_OP
 #define PD_BUILD_STATIC_OP(name) PD_BUILD_OP(static_op_##name)
@@ -103,122 +104,214 @@ std::vector<paddle::Tensor> DecodeAppendAttention(
   bool is_fp8 =
       cache_quant_type == "cache_fp8" || cache_quant_type == "block_wise_fp8";
   bool is_dynamic_cfp8 = cache_quant_type == "block_wise_fp8";
+  bool is_c16 = cache_quant_type == "none";
 
   if (max_just_dec_len_this_time > 0) {
-    DISPATCH_CAUSAL(
-        causal,
-        CAUSAL,
-        {DISPATCH_GQA_GROUP_SIZE(
-            group_size,
-            GROUP_SIZE,
-            {DISPATCH_HEAD_DIM(
-                meta_data.head_dims,
-                HEAD_DIM,
-                {DISPATCH_BLOCK_SIZE(
-                    meta_data.block_size,
-                    BLOCK_SIZE,
-                    {DISPATCH_Q_TILE_SIZE(
-                        group_size,
-                        max_tokens_per_batch,
-                        Q_TILE_SIZE,
-                        {DISPATCH_DyCfp8(
-                            is_dynamic_cfp8,
-                            IsDynamicC8,
-                            {DISPATCH_IS_FP8(is_fp8, IsFP8, {
-                              switch (qkv.dtype()) {
-                                case paddle::DataType::BFLOAT16: {
-                                  DecodeAppendC8Attention<paddle::bfloat16,
-                                                          GROUP_SIZE,
-                                                          HEAD_DIM,
-                                                          BLOCK_SIZE,
-                                                          CAUSAL,
-                                                          Q_TILE_SIZE,
-                                                          IsFP8,
-                                                          IsDynamicC8>(
-                                      meta_data,
-                                      qkv,
-                                      key_cache,
-                                      value_cache,
-                                      tmp_workspace,
-                                      tmp_m,
-                                      tmp_d,
-                                      attn_mask,
-                                      cache_quant_type == "block_wise_fp8"
-                                          ? cache_k_quant_scales.get()
-                                          : cache_k_dequant_scales.get(),
-                                      cache_quant_type == "block_wise_fp8"
-                                          ? cache_v_quant_scales.get()
-                                          : cache_v_dequant_scales.get(),
-                                      sinks,
-                                      seq_lens_this_time,
-                                      seq_lens_decoder,
-                                      seq_lens_encoder,
-                                      batch_id_per_token,
-                                      cu_seqlens_q,
-                                      block_tables,
-                                      block_indices,
-                                      num_blocks,
-                                      chunk_size,
-                                      max_input_length,
-                                      max_kv_len_this_time,
-                                      quant_max_bound,
-                                      quant_min_bound,
-                                      max_tokens_per_batch,
-                                      stream,
-                                      &fmha_out,
-                                      sliding_window);
-                                  break;
-                                }
-                                case paddle::DataType::FLOAT16: {
-                                  DecodeAppendC8Attention<paddle::float16,
-                                                          GROUP_SIZE,
-                                                          HEAD_DIM,
-                                                          BLOCK_SIZE,
-                                                          CAUSAL,
-                                                          Q_TILE_SIZE,
-                                                          IsFP8,
-                                                          IsDynamicC8>(
-                                      meta_data,
-                                      qkv,
-                                      key_cache,
-                                      value_cache,
-                                      tmp_workspace,
-                                      tmp_m,
-                                      tmp_d,
-                                      attn_mask,
-                                      cache_quant_type == "block_wise_fp8"
-                                          ? cache_k_quant_scales.get()
-                                          : cache_k_dequant_scales.get(),
-                                      cache_quant_type == "block_wise_fp8"
-                                          ? cache_v_quant_scales.get()
-                                          : cache_v_dequant_scales.get(),
-                                      sinks,
-                                      seq_lens_this_time,
-                                      seq_lens_decoder,
-                                      seq_lens_encoder,
-                                      batch_id_per_token,
-                                      cu_seqlens_q,
-                                      block_tables,
-                                      block_indices,
-                                      num_blocks,
-                                      chunk_size,
-                                      max_input_length,
-                                      max_kv_len_this_time,
-                                      quant_max_bound,
-                                      quant_min_bound,
-                                      max_tokens_per_batch,
-                                      stream,
-                                      &fmha_out,
-                                      sliding_window);
-                                  break;
-                                }
-                                default:
-                                  PD_THROW(
-                                      "NOT supported data type. "
-                                      "Only bfloat16 and float16 are "
-                                      "supported. ");
+    if (is_c16) {
+      DISPATCH_CAUSAL(
+          causal,
+          CAUSAL,
+          {DISPATCH_GQA_GROUP_SIZE(
+              group_size,
+              GROUP_SIZE,
+              {DISPATCH_HEAD_DIM(
+                  meta_data.head_dims,
+                  HEAD_DIM,
+                  {DISPATCH_BLOCK_SIZE(
+                      meta_data.block_size,
+                      BLOCK_SIZE,
+                      {DISPATCH_Q_TILE_SIZE(
+                          group_size, max_tokens_per_batch, Q_TILE_SIZE, {
+                            switch (qkv.dtype()) {
+                              case paddle::DataType::BFLOAT16: {
+                                DecodeAppendC16Attention<paddle::bfloat16,
+                                                         GROUP_SIZE,
+                                                         HEAD_DIM,
+                                                         BLOCK_SIZE,
+                                                         CAUSAL,
+                                                         Q_TILE_SIZE>(
+                                    meta_data,
+                                    qkv,
+                                    key_cache,
+                                    value_cache,
+                                    tmp_workspace,
+                                    tmp_m,
+                                    tmp_d,
+                                    attn_mask,
+                                    sinks,
+                                    seq_lens_this_time,
+                                    seq_lens_decoder,
+                                    seq_lens_encoder,
+                                    batch_id_per_token,
+                                    cu_seqlens_q,
+                                    block_tables,
+                                    block_indices,
+                                    num_blocks,
+                                    chunk_size,
+                                    max_input_length,
+                                    max_kv_len_this_time,
+                                    max_tokens_per_batch,
+                                    stream,
+                                    &fmha_out,
+                                    sliding_window);
+                                break;
                               }
-                            })})})})})})})
+                              case paddle::DataType::FLOAT16: {
+                                DecodeAppendC16Attention<paddle::float16,
+                                                         GROUP_SIZE,
+                                                         HEAD_DIM,
+                                                         BLOCK_SIZE,
+                                                         CAUSAL,
+                                                         Q_TILE_SIZE>(
+                                    meta_data,
+                                    qkv,
+                                    key_cache,
+                                    value_cache,
+                                    tmp_workspace,
+                                    tmp_m,
+                                    tmp_d,
+                                    attn_mask,
+                                    sinks,
+                                    seq_lens_this_time,
+                                    seq_lens_decoder,
+                                    seq_lens_encoder,
+                                    batch_id_per_token,
+                                    cu_seqlens_q,
+                                    block_tables,
+                                    block_indices,
+                                    num_blocks,
+                                    chunk_size,
+                                    max_input_length,
+                                    max_kv_len_this_time,
+                                    max_tokens_per_batch,
+                                    stream,
+                                    &fmha_out,
+                                    sliding_window);
+                                break;
+                              }
+                              default:
+                                PD_THROW(
+                                    "NOT supported data type. "
+                                    "Only bfloat16 and float16 are "
+                                    "supported. ");
+                            }
+                          })})})})})
+    } else {
+      DISPATCH_CAUSAL(
+          causal,
+          CAUSAL,
+          {DISPATCH_GQA_GROUP_SIZE(
+              group_size,
+              GROUP_SIZE,
+              {DISPATCH_HEAD_DIM(
+                  meta_data.head_dims,
+                  HEAD_DIM,
+                  {DISPATCH_BLOCK_SIZE(
+                      meta_data.block_size,
+                      BLOCK_SIZE,
+                      {DISPATCH_Q_TILE_SIZE(
+                          group_size,
+                          max_tokens_per_batch,
+                          Q_TILE_SIZE,
+                          {DISPATCH_DyCfp8(
+                              is_dynamic_cfp8,
+                              IsDynamicC8,
+                              {DISPATCH_IS_FP8(is_fp8, IsFP8, {
+                                switch (qkv.dtype()) {
+                                  case paddle::DataType::BFLOAT16: {
+                                    DecodeAppendC8Attention<paddle::bfloat16,
+                                                            GROUP_SIZE,
+                                                            HEAD_DIM,
+                                                            BLOCK_SIZE,
+                                                            CAUSAL,
+                                                            Q_TILE_SIZE,
+                                                            IsFP8,
+                                                            IsDynamicC8>(
+                                        meta_data,
+                                        qkv,
+                                        key_cache,
+                                        value_cache,
+                                        tmp_workspace,
+                                        tmp_m,
+                                        tmp_d,
+                                        attn_mask,
+                                        cache_quant_type == "block_wise_fp8"
+                                            ? cache_k_quant_scales.get()
+                                            : cache_k_dequant_scales.get(),
+                                        cache_quant_type == "block_wise_fp8"
+                                            ? cache_v_quant_scales.get()
+                                            : cache_v_dequant_scales.get(),
+                                        sinks,
+                                        seq_lens_this_time,
+                                        seq_lens_decoder,
+                                        seq_lens_encoder,
+                                        batch_id_per_token,
+                                        cu_seqlens_q,
+                                        block_tables,
+                                        block_indices,
+                                        num_blocks,
+                                        chunk_size,
+                                        max_input_length,
+                                        max_kv_len_this_time,
+                                        quant_max_bound,
+                                        quant_min_bound,
+                                        max_tokens_per_batch,
+                                        stream,
+                                        &fmha_out,
+                                        sliding_window);
+                                    break;
+                                  }
+                                  case paddle::DataType::FLOAT16: {
+                                    DecodeAppendC8Attention<paddle::float16,
+                                                            GROUP_SIZE,
+                                                            HEAD_DIM,
+                                                            BLOCK_SIZE,
+                                                            CAUSAL,
+                                                            Q_TILE_SIZE,
+                                                            IsFP8,
+                                                            IsDynamicC8>(
+                                        meta_data,
+                                        qkv,
+                                        key_cache,
+                                        value_cache,
+                                        tmp_workspace,
+                                        tmp_m,
+                                        tmp_d,
+                                        attn_mask,
+                                        cache_quant_type == "block_wise_fp8"
+                                            ? cache_k_quant_scales.get()
+                                            : cache_v_dequant_scales.get(),
+                                        cache_quant_type == "block_wise_fp8"
+                                            ? cache_v_quant_scales.get()
+                                            : cache_v_dequant_scales.get(),
+                                        sinks,
+                                        seq_lens_this_time,
+                                        seq_lens_decoder,
+                                        seq_lens_encoder,
+                                        batch_id_per_token,
+                                        cu_seqlens_q,
+                                        block_tables,
+                                        block_indices,
+                                        num_blocks,
+                                        chunk_size,
+                                        max_input_length,
+                                        max_kv_len_this_time,
+                                        quant_max_bound,
+                                        quant_min_bound,
+                                        max_tokens_per_batch,
+                                        stream,
+                                        &fmha_out,
+                                        sliding_window);
+                                    break;
+                                  }
+                                  default:
+                                    PD_THROW(
+                                        "NOT supported data type. "
+                                        "Only bfloat16 and float16 are "
+                                        "supported. ");
+                                }
+                              })})})})})})})
+    }
   }
   return {fmha_out};
 }

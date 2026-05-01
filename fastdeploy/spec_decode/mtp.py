@@ -404,6 +404,37 @@ class MTPProposer(Proposer):
             self.target_model_inputs["kv_num_blocks_x_cpu"]
         ).cpu()
 
+        # Decode attention split ops buffers
+        self.model_inputs["decode_block_indices"] = paddle.zeros_like(self.target_model_inputs["decode_block_indices"])
+        if current_platform.is_xpu() or current_platform.is_maca():
+            self.model_inputs["decode_num_blocks"] = paddle.zeros_like(
+                self.target_model_inputs["decode_num_blocks"]
+            ).cpu()
+        else:
+            self.model_inputs["decode_num_blocks"] = paddle.zeros_like(
+                self.target_model_inputs["decode_num_blocks"]
+            ).pin_memory()
+        self.model_inputs["decode_chunk_size"] = paddle.zeros_like(self.target_model_inputs["decode_chunk_size"])
+        self.model_inputs["decode_tmp_workspace"] = paddle.zeros_like(self.target_model_inputs["decode_tmp_workspace"])
+        self.model_inputs["decode_tmp_m"] = paddle.zeros_like(self.target_model_inputs["decode_tmp_m"])
+        self.model_inputs["decode_tmp_d"] = paddle.zeros_like(self.target_model_inputs["decode_tmp_d"])
+
+        # Decode attention split ops buffers
+        if (
+            "decode_block_indices" in self.target_model_inputs
+            and self.target_model_inputs["decode_block_indices"] is not None
+        ):
+            self.model_inputs["decode_block_indices"] = paddle.zeros_like(
+                self.target_model_inputs["decode_block_indices"]
+            )
+            self.model_inputs["decode_num_blocks"] = paddle.zeros_like(self.target_model_inputs["decode_num_blocks"])
+            self.model_inputs["decode_chunk_size"] = paddle.zeros_like(self.target_model_inputs["decode_chunk_size"])
+            self.model_inputs["decode_tmp_workspace"] = paddle.zeros_like(
+                self.target_model_inputs["decode_tmp_workspace"]
+            )
+            self.model_inputs["decode_tmp_m"] = paddle.zeros_like(self.target_model_inputs["decode_tmp_m"])
+            self.model_inputs["decode_tmp_d"] = paddle.zeros_like(self.target_model_inputs["decode_tmp_d"])
+
         # Get the attention backend
         attn_cls = get_attention_backend()
         attn_backend = attn_cls(
@@ -672,6 +703,15 @@ class MTPProposer(Proposer):
             kv_num_blocks_x_cpu=self.model_inputs["kv_num_blocks_x_cpu"],
             attn_mask_offsets=self.model_inputs["attn_mask_offsets"] if self.use_attn_mask_offset else None,
         )
+
+        # Decode attention split ops buffers (assigned after construction due to ForwardMeta __getattr__)
+        if "decode_block_indices" in self.model_inputs:
+            self.forward_meta.decode_block_indices = self.model_inputs["decode_block_indices"]
+            self.forward_meta.decode_num_blocks = self.model_inputs["decode_num_blocks"]
+            self.forward_meta.decode_chunk_size = self.model_inputs["decode_chunk_size"]
+            self.forward_meta.decode_tmp_workspace = self.model_inputs["decode_tmp_workspace"]
+            self.forward_meta.decode_tmp_m = self.model_inputs["decode_tmp_m"]
+            self.forward_meta.decode_tmp_d = self.model_inputs["decode_tmp_d"]
 
         # Initialzie attention meta data
         for attn_backend in self.attn_backends:

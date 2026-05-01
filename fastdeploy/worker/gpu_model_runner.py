@@ -1386,6 +1386,14 @@ class GPUModelRunner(ModelRunnerBase):
             gpu_routing_buffer=gpu_routing_buffer,
         )
 
+        # Decode attention split ops buffers (assigned after construction due to ForwardMeta __getattr__)
+        self.forward_meta.decode_block_indices = self.share_inputs["decode_block_indices"]
+        self.forward_meta.decode_num_blocks = self.share_inputs["decode_num_blocks"]
+        self.forward_meta.decode_chunk_size = self.share_inputs["decode_chunk_size"]
+        self.forward_meta.decode_tmp_workspace = self.share_inputs["decode_tmp_workspace"]
+        self.forward_meta.decode_tmp_m = self.share_inputs["decode_tmp_m"]
+        self.forward_meta.decode_tmp_d = self.share_inputs["decode_tmp_d"]
+
         dist_status = self.collect_distributed_status()
 
         if_only_decode = dist_status.if_only_decode
@@ -1614,6 +1622,8 @@ class GPUModelRunner(ModelRunnerBase):
             num_heads=num_heads,
             kv_num_heads=self.model_config.kv_num_heads,
             block_size=self.fd_config.cache_config.block_size,
+            head_dim=head_dim,
+            dtype=self.model_config.dtype,
         )
         self.share_inputs.update(res_buffer)
 
