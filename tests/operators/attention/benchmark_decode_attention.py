@@ -735,6 +735,7 @@ def run_decode_attention(
         None,
         None,
         None,
+        paddle.empty([dec_qkv_copy.shape[0], case.q_num_head * case.head_dim], dtype=dec_qkv_copy.dtype),  # fmha_out
         case.cache_quant_type,
         case.max_model_len,
         0.0,

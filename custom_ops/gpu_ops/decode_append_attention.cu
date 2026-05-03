@@ -60,6 +60,7 @@ std::vector<paddle::Tensor> DecodeAppendAttention(
     const paddle::optional<paddle::Tensor>& cache_v_zp,
     const paddle::optional<paddle::Tensor>& mask_offset,
     const paddle::optional<paddle::Tensor>& sinks,
+    paddle::Tensor& fmha_out,
     const std::string& cache_quant_type,
     const int max_input_length,
     const float quant_max_bound,
@@ -86,12 +87,6 @@ std::vector<paddle::Tensor> DecodeAppendAttention(
   meta_data.max_blocks_per_seq = block_tables.dims()[1];
   meta_data.block_size = key_cache.dims()[2];
   meta_data.batch_size = seq_lens_this_time.dims()[0];
-
-  // fmha_out generation, rewrite from AppendAttentionKernel
-  paddle::Tensor fmha_out = paddle::zeros(
-      {meta_data.token_num, meta_data.q_num_heads * meta_data.head_dims},
-      qkv.dtype(),
-      qkv.place());
 
   if (mask_offset) {
     meta_data.mask_offset = mask_offset.get().data<int>();
@@ -342,6 +337,7 @@ std::vector<std::vector<int64_t>> DecodeAppendAttentionInferShape(
     const paddle::optional<std::vector<int64_t>>& cache_v_zp_shape,
     const paddle::optional<std::vector<int64_t>>& mask_offset_shape,
     const paddle::optional<std::vector<int64_t>>& sinks_shape,
+    const std::vector<int64_t>& fmha_out_shape,
     const std::string& cache_quant_type,
     const int max_input_length,
     const float quant_max_bound,
@@ -349,15 +345,7 @@ std::vector<std::vector<int64_t>> DecodeAppendAttentionInferShape(
     const int max_tokens_per_batch,
     const bool causal,
     const int sliding_window) {
-  const int token_num = qkv_shape[0];
-  const int kv_num_heads = key_cache_shape[1];
-  int head_dim = key_cache_shape[3];
-  if (cache_quant_type == "cache_int4_zp") {
-    head_dim *= 2;
-  }
-  const int total_num_head = qkv_shape[qkv_shape.size() - 1] / head_dim;
-  const int num_heads = total_num_head - 2 * kv_num_heads;
-  return {{token_num, num_heads * head_dim}};
+  return {fmha_out_shape};
 }
 
 std::vector<paddle::DataType> DecodeAppendAttentionInferDtype(
@@ -386,6 +374,7 @@ std::vector<paddle::DataType> DecodeAppendAttentionInferDtype(
     const paddle::optional<paddle::DataType>& cache_v_zp_dtype,
     const paddle::optional<paddle::DataType>& mask_offset_dtype,
     const paddle::optional<paddle::DataType>& sinks_dtype,
+    const paddle::DataType& fmha_out_dtype,
     const std::string& cache_quant_type,
     const int max_input_length,
     const float quant_max_bound,
@@ -393,7 +382,7 @@ std::vector<paddle::DataType> DecodeAppendAttentionInferDtype(
     const int max_tokens_per_batch,
     const bool causal,
     const int sliding_window) {
-  return {qkv_dtype};
+  return {fmha_out_dtype};
 }
 
 PD_BUILD_STATIC_OP(decode_append_attention)
@@ -421,8 +410,10 @@ PD_BUILD_STATIC_OP(decode_append_attention)
              paddle::Optional("cache_k_zp"),
              paddle::Optional("cache_v_zp"),
              paddle::Optional("mask_offset"),
-             paddle::Optional("sinks")})
-    .Outputs({"fmha_out"})
+             paddle::Optional("sinks"),
+             "fmha_out"})
+    .Outputs({"fmha_out_out"})
+    .SetInplaceMap({{"fmha_out", "fmha_out_out"}})
     .Attrs({
         "cache_quant_type: std::string",
         "max_input_length: int",

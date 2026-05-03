@@ -519,6 +519,10 @@ class FlashAttentionBackend(AttentionBackend):
                 getattr(layer, "quant_min_bound", 0.0),
                 self.speculative_method is not None,
             )
+            res_decoder = paddle.empty(
+                [qkv.shape[0], self.num_heads * self.head_dim],
+                dtype=qkv.dtype,
+            )
             res_decoder = decode_append_attention(
                 qkv_out,
                 cache_k,
@@ -545,6 +549,7 @@ class FlashAttentionBackend(AttentionBackend):
                 getattr(layer, "cache_v_zp", None),
                 forward_meta.attn_mask_offsets,
                 getattr(layer, "sinks", None),
+                res_decoder,
                 getattr(layer, "cache_quant_type_str", "none"),
                 self.max_seq_len,
                 getattr(layer, "quant_max_bound", 0.0),

@@ -492,6 +492,7 @@ class TestDecodeAppendAttentionC16(unittest.TestCase):
             None,  # cache_v_zp
             None,  # mask_offset
             None,  # sinks
+            paddle.empty([dec_qkv.shape[0], self.q_num_head * self.head_dim], dtype=dec_qkv.dtype),  # fmha_out
             self.cache_quant_type,
             self.max_model_len,
             0.0,  # quant_max_bound

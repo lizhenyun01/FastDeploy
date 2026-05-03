@@ -246,6 +246,7 @@ std::vector<paddle::Tensor> DecodeAppendAttention(
     const paddle::optional<paddle::Tensor>& cache_v_zp,
     const paddle::optional<paddle::Tensor>& mask_offset,
     const paddle::optional<paddle::Tensor>& sinks,
+    paddle::Tensor& fmha_out,
     const std::string& cache_quant_type,
     const int max_input_length,
     const float quant_max_bound,
@@ -2020,7 +2021,7 @@ PYBIND11_MODULE(fastdeploy_ops, m) {
         &PerTokenGroupQuantFp8,
         "per_token_group_quant_fp8");
 
-    /**
+  /**
    * decoder_write_cache_with_rope.cu
    * decoder_write_cache_with_rope
    */
@@ -2035,7 +2036,7 @@ PYBIND11_MODULE(fastdeploy_ops, m) {
   m.def("decode_append_attention",
         &DecodeAppendAttention,
         "decoder append attention function");
-  
+
   /**
    * config_for_attention.cu
    * config_for_attention
