@@ -39,7 +39,7 @@
     },
     "max_instances_per_file": 80,
     "file_prefix": "decode_append_attention_c8",
-    "function_signature": "template __global__ void {function_name}{template_args}(const __grid_constant__ AttentionParams{params_template_args} params);\n\n"
+    "function_signature": "template __global__ void {function_name}{template_args}(AttentionParams{params_template_args} params);\n\n"
   },
   "multiquery_attention_c16": {
     "name": "decode_append_attention_c16_kernel",
@@ -73,6 +73,6 @@
     },
     "max_instances_per_file": 80,
     "file_prefix": "decode_append_attention_c16",
-    "function_signature": "template __global__ void {function_name}{template_args}(const __grid_constant__ AttentionParams{params_template_args} params);\n\n"
+    "function_signature": "template __global__ void {function_name}{template_args}(AttentionParams{params_template_args} params);\n\n"
   }
 }

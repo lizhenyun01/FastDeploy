@@ -609,45 +609,30 @@ __device__ __forceinline__ void merge_block_res(float (*o_frag)[num_frags_y][8],
                                                 float (*m)[2],
                                                 float (*d)[2],
                                                 const uint32_t wid,
-                                                const uint32_t tid) {
-  float2* smem_md = reinterpret_cast<float2*>(
-      md_smem + num_frags_x * num_frags_y * 1024);  // 4 * 32 * 8
+                                                const uint32_t tid,
+                                                const bool normalize = false) {
+  // Padded row stride (33 instead of 32) to avoid cross-row bank conflicts.
+  constexpr uint32_t kRowStride = 33;
+  // o_smem row stride in floats: kRowStride * 8 = 264
+  constexpr uint32_t kORowStride = kRowStride * 8;
+  // md_smem base offset: after all o_smem data
+  // NUM_WARPS(4) * num_frags_x * num_frags_y * kORowStride floats
+  constexpr uint32_t kOMemFloats = 4 * num_frags_x * num_frags_y * kORowStride;
+  float2* smem_md = reinterpret_cast<float2*>(md_smem + kOMemFloats);
+
+  // Phase 1: Write m/d to smem only (2KB, no o data yet)
 #pragma unroll
   for (uint32_t fx = 0; fx < num_frags_x; ++fx) {
 #pragma unroll
     for (uint32_t j = 0; j < 2; ++j) {
-      smem_md[((wid * num_frags_x + fx) * 2 + j) * 32 + tid] =
+      smem_md[((wid * num_frags_x + fx) * 2 + j) * kRowStride + tid] =
           make_float2(m[fx][j], d[fx][j]);
     }
   }
-#pragma unroll
-  for (uint32_t fx = 0; fx < num_frags_x; ++fx) {
-#pragma unroll
-    for (uint32_t fy = 0; fy < num_frags_y; ++fy) {
-      float2* md_smem_start =
-          (float2*)(md_smem +
-                    ((wid * num_frags_x + fx) * num_frags_y + fy) * 32 * 8 +
-                    tid * 2);
-#pragma unroll
-      for (uint32_t i = 0; i < 4; ++i) {
-        md_smem_start[i * 32] = ((float2*)(&o_frag[fx][fy][0]))[i];
-      }
-      // *(reinterpret_cast<float4*>(
-      //     md_smem + (((wid * num_frags_x + fx) * num_frags_y + fy) * 32 +
-      //     tid) *
-      //                   8)) =
-      //                   *(reinterpret_cast<float4*>(&o_frag[fx][fy][0]));
-      // *(reinterpret_cast<float4*>(
-      //     md_smem +
-      //     (((wid * num_frags_x + fx) * num_frags_y + fy) * 32 + tid) * 8 +
-      //     4)) =
-      // *(reinterpret_cast<float4*>(&o_frag[fx][fy][4]));
-    }
-  }
   __syncthreads();
-  float o_scale[4][num_frags_x][2];
 
-  // deal md/scale
+  // Phase 2: Compute global m/d and scale own o_frag in registers
+  float scale_j[2];
 #pragma unroll
   for (uint32_t fx = 0; fx < num_frags_x; ++fx) {
 #pragma unroll
@@ -661,53 +646,76 @@ __device__ __forceinline__ void merge_block_res(float (*o_frag)[num_frags_y][8],
       }
 #pragma unroll
       for (uint32_t i = 0; i < 4; ++i) {
-        float2 md = smem_md[((i * num_frags_x + fx) * 2 + j) * 32 + tid];
+        float2 md =
+            smem_md[((i * num_frags_x + fx) * 2 + j) * kRowStride + tid];
         float m_prev = m_new, d_prev = d_new;
         m_new = max(m_new, md.x);
-        // d_new = d_prev * expf(m_prev - m_new) + md.y * expf(md.x - m_new);
         d_new = fmaf(d_prev, expf(m_prev - m_new), md.y * expf(md.x - m_new));
       }
-#pragma unroll
-      for (uint32_t i = 0; i < 4; ++i) {
-        float2 md = smem_md[((i * num_frags_x + fx) * 2 + j) * 32 + tid];
-        o_scale[i][fx][j] = expf(md.x - m_new);
-      }
+      float own_scale = expf(m[fx][j] - m_new);
       m[fx][j] = m_new;
       d[fx][j] = d_new;
+      float d_rcp = normalize ? (1.f / d_new) : 1.f;
+      scale_j[j] = own_scale * d_rcp;
+    }
+    // Apply scale to o_frag using WGMMA fragment layout:
+    // regs 0,1→j=0, 2,3→j=1, 4,5→j=0, 6,7→j=1
+    // i.e., float2 index k → j = k % 2
+#pragma unroll
+    for (uint32_t fy = 0; fy < num_frags_y; ++fy) {
+#pragma unroll
+      for (uint32_t k = 0; k < 4; ++k) {
+        float s = scale_j[k % 2];
+        o_frag[fx][fy][2 * k + 0] *= s;
+        o_frag[fx][fy][2 * k + 1] *= s;
+      }
     }
   }
 
+  // Phase 3: Write pre-scaled o_frag to smem with padded stride
 #pragma unroll
   for (uint32_t fx = 0; fx < num_frags_x; ++fx) {
 #pragma unroll
     for (uint32_t fy = 0; fy < num_frags_y; ++fy) {
-      // num_warps * 32 * 8 each time
-      // AlignedVector<float2, 4> o_new_fp2;
+      float2* o_smem_start =
+          (float2*)(md_smem +
+                    ((wid * num_frags_x + fx) * num_frags_y + fy) *
+                        kORowStride +
+                    tid * 2);
+#pragma unroll
+      for (uint32_t i = 0; i < 4; ++i) {
+        o_smem_start[i * kRowStride] = ((float2*)(&o_frag[fx][fy][0]))[i];
+      }
+    }
+  }
+  __syncthreads();
+
+  // Phase 4: Accumulate all warps' scaled o_frag
+#pragma unroll
+  for (uint32_t fx = 0; fx < num_frags_x; ++fx) {
+#pragma unroll
+    for (uint32_t fy = 0; fy < num_frags_y; ++fy) {
       float2* o_new_fp2 = reinterpret_cast<float2*>(&o_frag[fx][fy][0]);
-      // float2* o_new_fp2 = reinterpret_cast<float2*>(&o_new[0]);
-#pragma
+#pragma unroll
       for (uint32_t o_id = 0; o_id < 4; ++o_id) {
         o_new_fp2[o_id] = make_float2(0.f, 0.f);
       }
 #pragma unroll
       for (uint32_t i = 0; i < 4; ++i) {
-        // AlignedVector<float, 8> oi;
         AlignedVector<float2, 4> oi_fp2;
-        float2* md_smem_start =
+        float2* o_smem_start =
             (float2*)(md_smem +
-                      ((i * num_frags_x + fx) * num_frags_y + fy) * 32 * 8 +
+                      ((i * num_frags_x + fx) * num_frags_y + fy) *
+                          kORowStride +
                       tid * 2);
 #pragma unroll
         for (uint32_t reg_id = 0; reg_id < 4; ++reg_id) {
-          oi_fp2[reg_id] = md_smem_start[reg_id * 32];
+          oi_fp2[reg_id] = o_smem_start[reg_id * kRowStride];
         }
 #pragma unroll
         for (uint32_t reg_fp2_id = 0; reg_fp2_id < 4; ++reg_fp2_id) {
-          float o_scale_fp2_tmp = o_scale[i][fx][reg_fp2_id % 2];
-          o_new_fp2[reg_fp2_id] =
-              fast_float2_fma(oi_fp2[reg_fp2_id],
-                              make_float2(o_scale_fp2_tmp, o_scale_fp2_tmp),
-                              o_new_fp2[reg_fp2_id]);
+          o_new_fp2[reg_fp2_id].x += oi_fp2[reg_fp2_id].x;
+          o_new_fp2[reg_fp2_id].y += oi_fp2[reg_fp2_id].y;
         }
       }
     }

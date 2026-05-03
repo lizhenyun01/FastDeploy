@@ -27,8 +27,31 @@ template <typename T,
           uint32_t num_frags_z,
           uint32_t num_frags_y>
 __global__ void decode_append_attention_c16_kernel(
-    const __grid_constant__ AttentionParams<T, T> params) {
+    AttentionParams<T, T> params) {
   const uint32_t tid = threadIdx.x, wid = threadIdx.y;
+
+  // Cache loop-invariant params fields into registers.
+  // Pass-by-value (no __grid_constant__) allows the compiler to cache
+  // struct fields, and explicit local variables guarantee no constant
+  // cache pressure in the grid-stride loop.
+  // Only cache frequently-used fields; rarely-used ones are accessed
+  // via params.xxx to reduce register pressure (Scheme I-A.2).
+  const auto qkv = params.qkv;
+  const auto cache_k = params.cache_k;
+  const auto cache_v = params.cache_v;
+  const auto seq_lens_q = params.seq_lens_q;
+  const auto seq_lens_kv = params.seq_lens_kv;
+  const auto block_table = params.block_table;
+  const auto cu_seqlens_q = params.cu_seqlens_q;
+  const auto block_indices = params.block_indices;
+  const auto mask_offset = params.mask_offset;
+  const auto attn_mask = params.attn_mask;
+  const auto tmp_o = params.tmp_o;
+  const auto tmp_m = params.tmp_m;
+  const auto tmp_d = params.tmp_d;
+  const float softmax_scale = params.softmax_scale;
+  const int q_num_heads = params.q_num_heads;
+  const int kv_num_heads = params.kv_num_heads;
 
   extern __shared__ __align__(128) uint8_t smem[];
   smem_t qo_smem(smem);
@@ -40,32 +63,28 @@ __global__ void decode_append_attention_c16_kernel(
 
   for (int lane_idx = blockIdx.x; lane_idx < total_block;
        lane_idx += gridDim.x) {
-    int4 indices =
-        reinterpret_cast<const int4 *>(params.block_indices)[lane_idx];
+    int4 indices = reinterpret_cast<const int4 *>(block_indices)[lane_idx];
     int batch_idx = indices.x;
     int kv_head_idx = indices.y;
     int chunk_idx = indices.z;
     int tile_idx = indices.w;
     int q_head_idx = kv_head_idx * GROUP_SIZE;
 
-    const uint32_t q_len = params.seq_lens_q[batch_idx];
-    // q_len > 0 and kv_len > 0 are guaranteed by config_decode_attn,
-    // which only generates block_indices entries for valid batches.
+    const uint32_t q_len = seq_lens_q[batch_idx];
     const int *block_table_now =
-        params.block_table + batch_idx * params.max_blocks_per_seq;
+        block_table + batch_idx * params.max_blocks_per_seq;
 
     constexpr uint32_t num_rows_per_block = num_frags_x * 16;
     const uint32_t q_end =
         min(q_len, div_up((tile_idx + 1) * num_rows_per_block, GROUP_SIZE));
-    const uint32_t kv_len = params.seq_lens_kv[batch_idx] + q_len;
+    const uint32_t kv_len = seq_lens_kv[batch_idx] + q_len;
     const uint32_t num_chunks_this_seq = div_up(kv_len, chunk_size);
 
     constexpr uint32_t num_vecs_per_head = HEAD_DIM / num_elems_per_128b<T>();
 
-    const uint32_t q_n_stride = params.q_num_heads * HEAD_DIM;
-    const uint32_t q_ori_n_stride =
-        (params.q_num_heads + params.kv_num_heads * 2) * HEAD_DIM;
-    const uint32_t kv_n_stride = params.kv_num_heads * BLOCK_SIZE * HEAD_DIM;
+    const uint32_t q_n_stride = q_num_heads * HEAD_DIM;
+    const uint32_t q_ori_n_stride = (q_num_heads + kv_num_heads * 2) * HEAD_DIM;
+    const uint32_t kv_n_stride = kv_num_heads * BLOCK_SIZE * HEAD_DIM;
     const uint32_t kv_h_stride = BLOCK_SIZE * HEAD_DIM;
     const uint32_t kv_b_stride = HEAD_DIM;
 
@@ -74,32 +93,30 @@ __global__ void decode_append_attention_c16_kernel(
     float m_frag[num_frags_x][2];
     float d_frag[num_frags_x][2];
 
-    T *o_base_ptr_T = nullptr;
-
     const uint32_t chunk_start = chunk_idx * chunk_size;
     const uint32_t chunk_end = min(kv_len, chunk_start + chunk_size);
     const uint32_t chunk_len = chunk_end - chunk_start;
 
     init_states<T, num_frags_x, num_frags_y>(o_frag, m_frag, d_frag);
 
-    const uint32_t q_start_seq_id = params.cu_seqlens_q[batch_idx];
+    const uint32_t q_start_seq_id = cu_seqlens_q[batch_idx];
     const uint32_t q_base_seq_id_this_block = tile_idx * num_frags_x * 16;
     const uint32_t q_offset = q_start_seq_id * q_ori_n_stride +
                               q_head_idx * HEAD_DIM +
                               tid % 8 * num_elems_per_128b<T>();
-    T *q_base_ptr = params.qkv + q_offset;
+    T *q_base_ptr = qkv + q_offset;
 
-    o_base_ptr_T = params.tmp_o +
-                   batch_idx * params.max_tokens_per_batch *
-                       params.max_num_chunks * q_n_stride +
-                   chunk_idx * q_n_stride + q_head_idx * HEAD_DIM +
-                   tid % 8 * num_elems_per_128b<T>();
+    T *o_base_ptr_T = tmp_o +
+                      batch_idx * params.max_tokens_per_batch *
+                          params.max_num_chunks * q_n_stride +
+                      chunk_idx * q_n_stride + q_head_idx * HEAD_DIM +
+                      tid % 8 * num_elems_per_128b<T>();
     const int *mask_offset_this_seq =
-        params.mask_offset ? params.mask_offset + q_start_seq_id * 2 : nullptr;
+        mask_offset ? mask_offset + q_start_seq_id * 2 : nullptr;
     const bool *attn_mask_this_seq =
-        params.attn_mask ? params.attn_mask + batch_idx * params.attn_mask_len *
-                                                  params.attn_mask_len
-                         : nullptr;
+        attn_mask ? attn_mask +
+                        batch_idx * params.attn_mask_len * params.attn_mask_len
+                  : nullptr;
 
     uint32_t q_smem_offset_r =
         smem_t::get_permuted_offset<num_vecs_per_head>(tid % 16, tid / 16);
@@ -119,7 +136,7 @@ __global__ void decode_append_attention_c16_kernel(
     __syncthreads();
 
     q_smem_inplace_multiply_sm_scale_multi_warps<num_frags_x, num_frags_y, T>(
-        &qo_smem, params.softmax_scale);
+        &qo_smem, softmax_scale);
 
     const uint32_t num_iterations =
         div_up(CAUSAL ? (min(chunk_len,
@@ -131,10 +148,10 @@ __global__ void decode_append_attention_c16_kernel(
                       : chunk_len,
                BLOCK_SIZE);
     const uint32_t mask_check_iteration =
-        (CAUSAL               ? (min(chunk_len,
+        (CAUSAL        ? (min(chunk_len,
                        sub_if_greater_or_zero(kv_len - q_len, chunk_start)))
-         : params.mask_offset ? 0
-                              : chunk_len) /
+         : mask_offset ? 0
+                       : chunk_len) /
         (BLOCK_SIZE);
 
     uint32_t k_smem_offset_r = smem_t::get_permuted_offset<num_vecs_per_head>(
@@ -146,11 +163,8 @@ __global__ void decode_append_attention_c16_kernel(
         wid * 4 + tid / 8, tid % 8);
 
     uint32_t kv_idx = chunk_start;
-    // block_table_idx tracks kv_idx / BLOCK_SIZE; since kv_idx increments by
-    // BLOCK_SIZE each iteration, block_table_idx simply increments by 1.
     int block_table_idx = kv_idx / BLOCK_SIZE;
     int block_id = __ldg(&block_table_now[block_table_idx]);
-    // Prefetch next block_id to overlap __ldg latency with compute_qk.
     int block_id_next = __ldg(&block_table_now[block_table_idx + 1]);
     if (block_id_next < 0) {
       block_id_next = 0;
@@ -158,8 +172,8 @@ __global__ void decode_append_attention_c16_kernel(
     const uint32_t const_offset = kv_head_idx * kv_h_stride +
                                   (wid * 4 + tid / 8) * kv_b_stride +
                                   tid % 8 * num_elems_per_128b<T>();
-    T *cache_k_now = params.cache_k + block_id * kv_n_stride + const_offset;
-    T *cache_v_now = params.cache_v + block_id * kv_n_stride + const_offset;
+    T *cache_k_now = cache_k + block_id * kv_n_stride + const_offset;
+    T *cache_v_now = cache_v + block_id * kv_n_stride + const_offset;
 
     produce_kv_blockwise<SharedMemFillMode::kNoFill,
                          NUM_WARPS,
@@ -188,9 +202,6 @@ __global__ void decode_append_attention_c16_kernel(
     commit_group();
 #pragma unroll 1
     for (uint32_t iter = 0; iter < num_iterations; ++iter) {
-      // Prefetch block_id for next iteration's K/V loading.
-      // block_table_idx increments by 1 each iteration since kv_idx
-      // increments by BLOCK_SIZE, avoiding integer division in the loop.
       if (iter + 1 < num_iterations) {
         block_id_next = __ldg(&block_table_now[block_table_idx + 1]);
         if (block_id_next < 0) {
@@ -201,7 +212,6 @@ __global__ void decode_append_attention_c16_kernel(
       wait_group<1>();
       __syncthreads();
 
-      // s = qk
       compute_qk<num_frags_x, num_frags_y, num_frags_z, T>(
           &qo_smem, &q_smem_offset_r, &k_smem, &k_smem_offset_r, s_frag);
 
@@ -224,18 +234,15 @@ __global__ void decode_append_attention_c16_kernel(
                             params.sliding_window);
       }
 
-      // update m,d
       update_mdo_states<num_frags_x, num_frags_y, num_frags_z>(
           s_frag, o_frag, m_frag, d_frag);
       __syncthreads();
 
-      // Advance kv_idx and block_table_idx for next iteration.
       kv_idx += BLOCK_SIZE;
       block_table_idx++;
 
-      // Load K/V for next iteration using prefetched block_id
       block_id = block_id_next;
-      cache_k_now = params.cache_k + block_id * kv_n_stride + const_offset;
+      cache_k_now = cache_k + block_id * kv_n_stride + const_offset;
       produce_kv_blockwise<SharedMemFillMode::kNoFill,
                            NUM_WARPS,
                            BLOCK_SIZE,
@@ -251,12 +258,11 @@ __global__ void decode_append_attention_c16_kernel(
       wait_group<1>();
       __syncthreads();
 
-      // compute sfm*v
       compute_sfm_v<num_frags_x, num_frags_y, num_frags_z, T>(
           &v_smem, &v_smem_offset_r, s_frag, o_frag, d_frag);
       __syncthreads();
 
-      cache_v_now = params.cache_v + block_id * kv_n_stride + const_offset;
+      cache_v_now = cache_v + block_id * kv_n_stride + const_offset;
       produce_kv_blockwise<SharedMemFillMode::kFillZero,
                            NUM_WARPS,
                            BLOCK_SIZE,
@@ -272,14 +278,16 @@ __global__ void decode_append_attention_c16_kernel(
     }
     wait_group<0>();
     __syncthreads();
+    const bool do_normalize = (num_chunks_this_seq <= 1);
     merge_block_res<num_frags_x, num_frags_y, T>(
-        o_frag, reinterpret_cast<float *>(smem), m_frag, d_frag, wid, tid);
+        o_frag,
+        reinterpret_cast<float *>(smem),
+        m_frag,
+        d_frag,
+        wid,
+        tid,
+        do_normalize);
 
-    if (num_chunks_this_seq <= 1) {
-      normalize_d<num_frags_x, num_frags_y>(o_frag, d_frag);
-    }
-
-    // write o
     write_o_reg_gmem_multi_warps<GROUP_SIZE, num_frags_x, num_frags_y, T>(
         o_frag,
         &qo_smem,
@@ -306,10 +314,10 @@ __global__ void decode_append_attention_c16_kernel(
                          qo_idx_now / GROUP_SIZE) *
                             params.max_num_chunks +
                         chunk_idx) *
-                           params.q_num_heads +
+                           q_num_heads +
                        qo_head_idx;
-              params.tmp_m[offset] = m_frag[fx][j];
-              params.tmp_d[offset] = d_frag[fx][j];
+              tmp_m[offset] = m_frag[fx][j];
+              tmp_d[offset] = d_frag[fx][j];
             }
           }
         }
@@ -360,15 +368,14 @@ void DecodeAppendC16Attention(const AppendAttnMetaData &meta_data,
   constexpr uint32_t NUM_WARP_KV = NUM_WARPS_PER_BLOCK / NUM_WARP_Q;
   constexpr uint32_t num_frags_x = Q_TILE_SIZE / (16 * NUM_WARP_Q);
   constexpr uint32_t num_frags_y = HEAD_DIM / 16;
-  constexpr uint32_t num_qrow_per_block = NUM_WARP_Q * num_frags_x * 16;
 
   constexpr uint32_t num_frags_z = BLOCK_SIZE / 16 / NUM_WARP_KV;
   constexpr uint32_t smem_size_0 =
       (num_frags_x + NUM_WARP_KV * num_frags_z * 2) * 16 * HEAD_DIM *
       sizeof(NV_TYPE);
   constexpr uint32_t smem_size_1 =
-      NUM_WARPS_PER_BLOCK * num_frags_x * num_frags_y * 32 * 8 * sizeof(float) +
-      NUM_WARPS_PER_BLOCK * num_frags_x * 2 * 32 * 8;
+      NUM_WARPS_PER_BLOCK * num_frags_x * num_frags_y * 33 * 8 * sizeof(float) +
+      NUM_WARPS_PER_BLOCK * num_frags_x * 2 * 33 * 8;
   constexpr uint32_t smem_size =
       smem_size_0 > smem_size_1 ? smem_size_0 : smem_size_1;
 
