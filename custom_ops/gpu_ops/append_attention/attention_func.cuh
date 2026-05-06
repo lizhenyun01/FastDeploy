@@ -54,8 +54,8 @@ __device__ __forceinline__ void load_block_table_per_chunk(
     uint32_t wid) {
   uint32_t len = chunk_end / BLOCK_SIZE - chunk_start / BLOCK_SIZE;
   for (uint32_t i = 0; i < div_up(len, 128); i++) {
-    uint32_t offset = (wid * kWarpSize + tid) * i;
-    if (offset <= len) {
+    uint32_t offset = wid * kWarpSize + tid + i * 128;
+    if (offset < len) {
       block_table_smem[offset] = block_table_chunk_start[offset];
     }
   }
