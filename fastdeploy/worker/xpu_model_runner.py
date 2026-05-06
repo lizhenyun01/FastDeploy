@@ -1344,6 +1344,14 @@ class XPUModelRunner(ModelRunnerBase):
             self.share_inputs["kv_num_blocks_x_cpu"] = paddle.full([1], 0, dtype="int32").cpu()
             self.share_inputs["max_len_kv_cpu"] = paddle.full([1], 0, dtype="int32").cpu()
 
+            # Decode attention split ops buffers (not used on XPU, placeholders for MTP compatibility)
+            self.share_inputs["decode_block_indices"] = None
+            self.share_inputs["decode_num_blocks"] = None
+            self.share_inputs["decode_chunk_size"] = None
+            self.share_inputs["decode_tmp_workspace"] = None
+            self.share_inputs["decode_tmp_m"] = None
+            self.share_inputs["decode_tmp_d"] = None
+
         # Get the attention backend
         attn_cls = get_attention_backend()
         attn_backend = attn_cls(

@@ -15,6 +15,9 @@
 """
 
 from .append_attention import append_attention, append_attention_with_output
+from .config_for_attention import config_for_attention
+from .decode_append_attention import decode_append_attention
+from .decoder_write_cache_with_rope import decoder_write_cache_with_rope
 from .flash_attn_v4 import flash_attn_v4
 from .flash_mask_attention import flash_mask_attention
 from .get_attn_mask_q import get_attn_mask_q
@@ -24,9 +27,6 @@ from .init_kv_signal_per_query import init_kv_signal_per_query
 from .init_signal_layerwise import init_signal_layerwise
 from .open_shm_and_get_meta_signal import open_shm_and_get_meta_signal
 from .pre_cache_len_concat import pre_cache_len_concat
-from .config_for_attention import config_for_attention
-from .decode_append_attention import decode_append_attention
-from .decoder_write_cache_with_rope import decoder_write_cache_with_rope
 
 __all__ = [
     "get_block_shape_and_split_kv_block",
