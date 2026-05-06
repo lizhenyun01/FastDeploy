@@ -396,7 +396,6 @@ elif paddle.is_compiled_with_cuda():
         "-Igpu_ops/fp8_gemm_with_cutlass",
         "-Igpu_ops",
         "-Ithird_party/nlohmann_json/include",
-        "-use_fast_math",
     ]
     max_jobs, nvcc_threads = get_compile_parallelism()
     print(f"MAX_JOBS = {max_jobs}, nvcc -t = {nvcc_threads}")
