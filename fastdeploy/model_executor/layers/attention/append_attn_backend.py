@@ -111,27 +111,25 @@ def allocate_launch_related_buffer(
     res["kv_num_blocks_x_cpu"] = paddle.full([1], 0, dtype="int32").cpu()
 
     # Decode attention split ops buffers
-    min_chunk_size = 128
-    max_num_chunk = (max_model_len + min_chunk_size - 1) // min_chunk_size
-    q_tile_size = 16 if decoder_step_token_num * group_size <= 16 else 32
-    q_tile_num = (decoder_step_token_num * group_size + q_tile_size - 1) // q_tile_size
-    res["decode_block_indices"] = paddle.full(
-        [max_batch_size * kv_num_heads * max_num_chunk * q_tile_num, 4], 0, dtype="int32"
-    )
-    if current_platform.is_maca():
-        res["decode_num_blocks"] = paddle.full([1], 0, dtype="int32").cpu()
-    else:
-        res["decode_num_blocks"] = paddle.full([1], 0, dtype="int32").pin_memory()
-    res["decode_chunk_size"] = paddle.full([1], 0, dtype="int32")
-    res["decode_tmp_workspace"] = paddle.full(
-        [max_batch_size * decoder_step_token_num, max_num_chunk, num_heads * head_dim], 0, dtype=dtype
-    )
-    res["decode_tmp_m"] = paddle.full(
-        [max_batch_size * decoder_step_token_num, max_num_chunk, num_heads], 0, dtype="float32"
-    )
-    res["decode_tmp_d"] = paddle.full(
-        [max_batch_size * decoder_step_token_num, max_num_chunk, num_heads], 0, dtype="float32"
-    )
+    if envs.USE_DECODE_ATTENTION:
+        min_chunk_size = 128
+        max_num_chunk = (max_model_len + min_chunk_size - 1) // min_chunk_size
+        q_tile_size = 16 if decoder_step_token_num * group_size <= 16 else 32
+        q_tile_num = (decoder_step_token_num * group_size + q_tile_size - 1) // q_tile_size
+        res["decode_block_indices"] = paddle.full(
+            [max_batch_size * kv_num_heads * max_num_chunk * q_tile_num, 4], 0, dtype="int32"
+        )
+        res["decode_num_blocks"] = paddle.full([1], 0, dtype="int32")
+        res["decode_chunk_size"] = paddle.full([1], 0, dtype="int32")
+        res["decode_tmp_workspace"] = paddle.full(
+            [max_batch_size * decoder_step_token_num, max_num_chunk, num_heads * head_dim], 0, dtype=dtype
+        )
+        res["decode_tmp_m"] = paddle.full(
+            [max_batch_size * decoder_step_token_num, max_num_chunk, num_heads], 0, dtype="float32"
+        )
+        res["decode_tmp_d"] = paddle.full(
+            [max_batch_size * decoder_step_token_num, max_num_chunk, num_heads], 0, dtype="float32"
+        )
 
     return res
 

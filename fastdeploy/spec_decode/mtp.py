@@ -405,19 +405,17 @@ class MTPProposer(Proposer):
         ).cpu()
 
         # Decode attention split ops buffers
-        self.model_inputs["decode_block_indices"] = paddle.zeros_like(self.target_model_inputs["decode_block_indices"])
-        if current_platform.is_xpu() or current_platform.is_maca():
-            self.model_inputs["decode_num_blocks"] = paddle.zeros_like(
-                self.target_model_inputs["decode_num_blocks"]
-            ).cpu()
-        else:
-            self.model_inputs["decode_num_blocks"] = paddle.zeros_like(
-                self.target_model_inputs["decode_num_blocks"]
-            ).pin_memory()
-        self.model_inputs["decode_chunk_size"] = paddle.zeros_like(self.target_model_inputs["decode_chunk_size"])
-        self.model_inputs["decode_tmp_workspace"] = paddle.zeros_like(self.target_model_inputs["decode_tmp_workspace"])
-        self.model_inputs["decode_tmp_m"] = paddle.zeros_like(self.target_model_inputs["decode_tmp_m"])
-        self.model_inputs["decode_tmp_d"] = paddle.zeros_like(self.target_model_inputs["decode_tmp_d"])
+        if "decode_block_indices" in self.target_model_inputs:
+            self.model_inputs["decode_block_indices"] = paddle.zeros_like(
+                self.target_model_inputs["decode_block_indices"]
+            )
+            self.model_inputs["decode_num_blocks"] = paddle.zeros_like(self.target_model_inputs["decode_num_blocks"])
+            self.model_inputs["decode_chunk_size"] = paddle.zeros_like(self.target_model_inputs["decode_chunk_size"])
+            self.model_inputs["decode_tmp_workspace"] = paddle.zeros_like(
+                self.target_model_inputs["decode_tmp_workspace"]
+            )
+            self.model_inputs["decode_tmp_m"] = paddle.zeros_like(self.target_model_inputs["decode_tmp_m"])
+            self.model_inputs["decode_tmp_d"] = paddle.zeros_like(self.target_model_inputs["decode_tmp_d"])
 
         # Decode attention split ops buffers
         if (

@@ -1258,14 +1258,6 @@ class MetaxModelRunner(ModelRunnerBase):
             gpu_routing_buffer=gpu_routing_buffer,
         )
 
-        # Decode attention split ops buffers (assigned after construction due to ForwardMeta __getattr__)
-        self.forward_meta.decode_block_indices = self.share_inputs["decode_block_indices"]
-        self.forward_meta.decode_num_blocks = self.share_inputs["decode_num_blocks"]
-        self.forward_meta.decode_chunk_size = self.share_inputs["decode_chunk_size"]
-        self.forward_meta.decode_tmp_workspace = self.share_inputs["decode_tmp_workspace"]
-        self.forward_meta.decode_tmp_m = self.share_inputs["decode_tmp_m"]
-        self.forward_meta.decode_tmp_d = self.share_inputs["decode_tmp_d"]
-
         dist_status = self.collect_distributed_status()
 
         if_only_decode = dist_status.if_only_decode
