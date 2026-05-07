@@ -405,7 +405,10 @@ class MTPProposer(Proposer):
         ).cpu()
 
         # Decode attention split ops buffers
-        if "decode_block_indices" in self.target_model_inputs:
+        if (
+            "decode_block_indices" in self.target_model_inputs
+            and self.target_model_inputs["decode_block_indices"] is not None
+        ):
             self.model_inputs["decode_block_indices"] = paddle.zeros_like(
                 self.target_model_inputs["decode_block_indices"]
             )

@@ -411,7 +411,7 @@ __device__ __forceinline__ void mask_s(const bool* attn_mask,
                                        const int* mask_offset = nullptr,
                                        const int sliding_window = 0) {
   const uint32_t tx = threadIdx.x;
-#pragma unroll
+#pragma unroll 1
   for (uint32_t fx = 0; fx < num_frags_x; ++fx) {
 #pragma unroll
     for (uint32_t fz = 0; fz < num_frags_z; ++fz) {
@@ -768,7 +768,7 @@ __device__ __forceinline__ void write_o_reg_gmem_multi_warps(
   // [num_warps * num_frags_x * 16, num_frags_y * 16]
   if (ty == 0) {
     // [num_frags_x * 16, num_frags_y * 16]
-#pragma unroll
+#pragma unroll 1
     for (uint32_t fx = 0; fx < num_frags_x; ++fx) {
 #pragma unroll
       for (uint32_t fy = 0; fy < num_frags_y; ++fy) {
@@ -793,7 +793,7 @@ __device__ __forceinline__ void write_o_reg_gmem_multi_warps(
       smem_t::get_permuted_offset<num_vecs_per_head>(ty * 4 + tx / 8, tx % 8);
 
   const uint32_t tx_offset = tx / 8;
-#pragma unroll
+#pragma unroll 1
   for (uint32_t fx = 0; fx < num_frags_x; ++fx) {
     const uint32_t base_offset = o_idx_base + fx * 16 + tx_offset;
 #pragma unroll
