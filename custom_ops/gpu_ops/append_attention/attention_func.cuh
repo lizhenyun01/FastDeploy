@@ -1141,33 +1141,36 @@ __global__ void merge_chunks_kernel(
     // Step 2: Intra-warp reduction via warp shuffle
     // Each warp has 2 ty values: ty_low at lanes 0-15, ty_high at lanes 16-31
     // Merge ty_high into ty_low using shuffle
-    {
-      // Determine the partner ty in the same warp
-      // ty_low = ty & ~1, ty_high = ty | 1
-      const int partner_lane = lane_id ^ 16;  // flip bit 4 to swap low/high ty
-      const float m_partner = __shfl_sync(0xffffffff, m, partner_lane);
-      const float d_partner = __shfl_sync(0xffffffff, d, partner_lane);
-      LoadT partner_vec;
+    const int partner_lane = lane_id ^ 16;  // flip bit 4 to swap low/high ty
+    const float m_partner = __shfl_sync(0xffffffff, m, partner_lane);
+    const float d_partner = __shfl_sync(0xffffffff, d, partner_lane);
+    // Pack adjacent 16-bit pairs into 32-bit for efficient shuffle.
+    // AlignedVector alignment >= 4 bytes, so uint32 reinterpret is safe
+    // — no OOB read, no type confusion. This halves shuffle count vs
+    // per-element memcpy for bf16/fp16.
+    constexpr int PACKED_SIZE = vec_size * sizeof(T) / sizeof(unsigned);
+    const unsigned* packed_res = reinterpret_cast<const unsigned*>(&res_vec);
+    unsigned packed_partner[PACKED_SIZE];
+#pragma unroll
+    for (int j = 0; j < PACKED_SIZE; j++) {
+      packed_partner[j] = __shfl_sync(0xffffffff, packed_res[j], partner_lane);
+    }
+    LoadT partner_vec;
+    memcpy(&partner_vec, packed_partner, sizeof(partner_vec));
+
+    // Merge partner into self (only the "low ty" keeps the result)
+    float m_new = max(m, m_partner);
+    const float scale1 = __expf(m - m_new);
+    const float scale2 = __expf(m_partner - m_new);
+    float d_new = d * scale1 + d_partner * scale2;
+    if ((ty & 1) == 0) {  // low ty keeps merged result
+      m = m_new;
+      d = d_new;
+      const T scale1_T = static_cast<T>(scale1);
+      const T scale2_T = static_cast<T>(scale2);
 #pragma unroll
       for (int j = 0; j < vec_size; j++) {
-        partner_vec[j] = __shfl_sync(
-            0xffffffff, reinterpret_cast<unsigned&>(res_vec[j]), partner_lane);
-      }
-
-      // Merge partner into self (only the "low ty" keeps the result)
-      float m_new = max(m, m_partner);
-      const float scale1 = __expf(m - m_new);
-      const float scale2 = __expf(m_partner - m_new);
-      float d_new = d * scale1 + d_partner * scale2;
-      if ((ty & 1) == 0) {  // low ty keeps merged result
-        m = m_new;
-        d = d_new;
-        const T scale1_T = static_cast<T>(scale1);
-        const T scale2_T = static_cast<T>(scale2);
-#pragma unroll
-        for (int j = 0; j < vec_size; j++) {
-          res_vec[j] = res_vec[j] * scale1_T + partner_vec[j] * scale2_T;
-        }
+        res_vec[j] = res_vec[j] * scale1_T + partner_vec[j] * scale2_T;
       }
     }
 
