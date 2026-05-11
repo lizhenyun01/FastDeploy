@@ -519,11 +519,14 @@ class FlashAttentionBackend(AttentionBackend):
                 getattr(layer, "quant_min_bound", 0.0),
                 self.speculative_method is not None,
             )
-            res_decoder = paddle.empty(
-                [qkv.shape[0], self.num_heads * self.head_dim],
-                dtype=qkv.dtype,
-            )
-            res_decoder = decode_append_attention(
+            if use_fa_do_prefill:
+                res_decoder = res_encoder
+            else:
+                res_decoder = paddle.empty(
+                    [qkv.shape[0], self.num_heads * self.head_dim],
+                    dtype=qkv.dtype,
+                )
+            decode_append_attention(
                 qkv_out,
                 cache_k,
                 cache_v,
@@ -557,6 +560,7 @@ class FlashAttentionBackend(AttentionBackend):
                 self.speculate_max_draft_token_num + 1,
                 self.causal,
             )
+            return res_decoder
         else:
             res_decoder = append_attention(
                 qkv,
@@ -613,18 +617,18 @@ class FlashAttentionBackend(AttentionBackend):
                 self.speculative_method is not None,
             )
 
-        if use_fa_do_prefill:
-            merge_prefill_decode_output(
-                res_encoder,
-                res_decoder,
-                forward_meta.seq_lens_encoder,
-                forward_meta.seq_lens_decoder,
-                forward_meta.seq_lens_this_time,
-                forward_meta.cu_seqlens_q,
-                self.num_heads,
-                self.head_dim,
-                self.speculate_max_draft_token_num + 1,
-            )
-            return res_encoder
-        else:
-            return res_decoder
+            if use_fa_do_prefill:
+                merge_prefill_decode_output(
+                    res_encoder,
+                    res_decoder,
+                    forward_meta.seq_lens_encoder,
+                    forward_meta.seq_lens_decoder,
+                    forward_meta.seq_lens_this_time,
+                    forward_meta.cu_seqlens_q,
+                    self.num_heads,
+                    self.head_dim,
+                    self.speculate_max_draft_token_num + 1,
+                )
+                return res_encoder
+            else:
+                return res_decoder

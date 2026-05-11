@@ -484,13 +484,7 @@ __device__ __forceinline__ void update_mdo_states(
       float2 fp2_scale = make_float2(o_scale, o_scale);
 #pragma unroll
       for (uint32_t fy = 0; fy < num_frags_y; ++fy) {
-        // o_frag[fx][fy][j * 2 + 0] *= o_scale;
-        // o_frag[fx][fy][j * 2 + 1] *= o_scale;
-        // o_frag[fx][fy][j * 2 + 4] *= o_scale;
-        // o_frag[fx][fy][j * 2 + 5] *= o_scale;
-
         float2* o_frag_ptr = reinterpret_cast<float2*>(o_frag[fx][fy] + j_id);
-        // printf("fp2_len:%d, %d", sizeof(o_frag_ptr[0]), sizeof(fp2_scale));
         o_frag_ptr[0] = fast_float2_mul(o_frag_ptr[0], fp2_scale);
         o_frag_ptr[2] = fast_float2_mul(o_frag_ptr[2], fp2_scale);
       }
@@ -502,14 +496,6 @@ __device__ __forceinline__ void update_mdo_states(
         s_frag_ptr[1] = __expf(s_frag_ptr[1] - tmp_m);
         s_frag_ptr[4] = __expf(s_frag_ptr[4] - tmp_m);
         s_frag_ptr[5] = __expf(s_frag_ptr[5] - tmp_m);
-        // s_frag[fx][fz][j * 2 + 0] =
-        //     __expf(s_frag[fx][fz][j * 2 + 0] - m[fx][j]);
-        // s_frag[fx][fz][j * 2 + 1] =
-        //     __expf(s_frag[fx][fz][j * 2 + 1] - m[fx][j]);
-        // s_frag[fx][fz][j * 2 + 4] =
-        //     __expf(s_frag[fx][fz][j * 2 + 4] - m[fx][j]);
-        // s_frag[fx][fz][j * 2 + 5] =
-        //     __expf(s_frag[fx][fz][j * 2 + 5] - m[fx][j]);
       }
     }
   }
@@ -1043,8 +1029,9 @@ __global__ void merge_chunks_kernel(
     const int max_tokens_per_batch = 5) {
   const int vid = threadIdx.x, ty = threadIdx.y;
   const int hid = blockIdx.y;
-  __shared__ T smem[bdy * HEAD_DIM];
-  __shared__ float md_smem[bdy * 2];
+  // After intra-warp reduction, only bdy/2 results need smem storage
+  __shared__ T smem[(bdy / 2) * HEAD_DIM];
+  __shared__ float md_smem[(bdy / 2) * 2];
 #if (defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 900))
   cudaGridDependencySynchronize();
 #endif
@@ -1055,6 +1042,7 @@ __global__ void merge_chunks_kernel(
        qid += gridDim.x * bdy) {
     const uint32_t bid = batch_id_per_token[qid];
     if (bid == (uint32_t)-1) continue;
+    if (seq_lens_encoder[bid] > 0) continue;  // skip prefill batches
     const uint32_t local_seq_id = qid - cu_seqlens_q[bid];
     const int seq_len_q = seq_lens_q[bid];
     if (seq_len_q == 0) continue;
@@ -1075,31 +1063,28 @@ __global__ void merge_chunks_kernel(
         load_vec, &out[(qid * num_heads + hid) * head_dim + vid * vec_size]);
   }
 
-  // Phase 2: Slow path — all ty cooperate on same qid (uses smem + syncthreads)
+  // Phase 2: Slow path — merge multi-chunk results
+  // Optimization: use warp-shuffle reduction within each warp, then cross-warp
+  // via smem. This eliminates the large smem[bdy * HEAD_DIM] buffer and reduces
+  // syncthreads from 2 per qid to 1 per qid.
+  // Block layout: (blockx=16, bdy=8) => 4 warps, each warp has 2 ty values
+  //   Warp 0: ty=0,1  Warp 1: ty=2,3  Warp 2: ty=4,5  Warp 3: ty=6,7
+  //   Lane layout within warp: lanes 0-15 = (ty_low, vid), lanes 16-31 =
+  //   (ty_high, vid)
+  const int lane_id = (ty * blockDim.x + vid) % 32;
+
   for (int qid = blockIdx.x; qid < token_num; qid += gridDim.x) {
     const uint32_t bid = batch_id_per_token[qid];
-    if (bid == (uint32_t)-1) {
-      __syncthreads();
-      continue;
-    }
+    if (bid == (uint32_t)-1) continue;  // uniform skip — no syncthreads needed
+    if (seq_lens_encoder[bid] > 0) continue;
     const uint32_t local_seq_id = qid - cu_seqlens_q[bid];
     const int seq_len_q = seq_lens_q[bid];
-    if (seq_len_q == 0) {
-      __syncthreads();
-      continue;
-    }
+    if (seq_len_q == 0) continue;
     int seq_len_kv = seq_lens_kv[bid];
-    if (seq_len_kv == 0) {
-      __syncthreads();
-      continue;
-    }
+    if (seq_len_kv == 0) continue;
     seq_len_kv += seq_len_q;
     const int num_chunks_this_seq = div_up(seq_len_kv, *chunk_size_ptr);
-    if (num_chunks_this_seq == 1) {
-      // Already handled in Phase 1
-      __syncthreads();
-      continue;
-    }
+    if (num_chunks_this_seq == 1) continue;  // handled in Phase 1
 
     LoadT load_vec;
     LoadT res_vec;
@@ -1121,6 +1106,9 @@ __global__ void merge_chunks_kernel(
     } else if constexpr (std::is_same<T, __nv_bfloat16>::value) {
       m = -3.0e+30f;
     }
+
+    // Step 1: Each ty iterates over its chunk subset and does local online
+    // softmax merge
 #pragma unroll 2
     for (int i = ty; i < num_chunks_this_seq; i += bdy) {
       uint32_t offset;
@@ -1149,17 +1137,53 @@ __global__ void merge_chunks_kernel(
         res_vec[j] = res_vec[j] * scale1_T + load_vec[j] * scale2_T;
       }
     }
-    // store ty res
-    Store<T, vec_size>(res_vec, &smem[ty * head_dim + vid * vec_size]);
-    md_smem[2 * ty] = m;
-    md_smem[2 * ty + 1] = d;
+
+    // Step 2: Intra-warp reduction via warp shuffle
+    // Each warp has 2 ty values: ty_low at lanes 0-15, ty_high at lanes 16-31
+    // Merge ty_high into ty_low using shuffle
+    {
+      // Determine the partner ty in the same warp
+      // ty_low = ty & ~1, ty_high = ty | 1
+      const int partner_lane = lane_id ^ 16;  // flip bit 4 to swap low/high ty
+      const float m_partner = __shfl_sync(0xffffffff, m, partner_lane);
+      const float d_partner = __shfl_sync(0xffffffff, d, partner_lane);
+      LoadT partner_vec;
+#pragma unroll
+      for (int j = 0; j < vec_size; j++) {
+        partner_vec[j] = __shfl_sync(
+            0xffffffff, reinterpret_cast<unsigned&>(res_vec[j]), partner_lane);
+      }
+
+      // Merge partner into self (only the "low ty" keeps the result)
+      float m_new = max(m, m_partner);
+      const float scale1 = __expf(m - m_new);
+      const float scale2 = __expf(m_partner - m_new);
+      float d_new = d * scale1 + d_partner * scale2;
+      if ((ty & 1) == 0) {  // low ty keeps merged result
+        m = m_new;
+        d = d_new;
+        const T scale1_T = static_cast<T>(scale1);
+        const T scale2_T = static_cast<T>(scale2);
+#pragma unroll
+        for (int j = 0; j < vec_size; j++) {
+          res_vec[j] = res_vec[j] * scale1_T + partner_vec[j] * scale2_T;
+        }
+      }
+    }
+
+    // Cross-warp: only even ty (0,2,4,6) write to smem
+    if ((ty & 1) == 0) {
+      Store<T, vec_size>(res_vec, &smem[(ty / 2) * head_dim + vid * vec_size]);
+      md_smem[ty] = m;
+      md_smem[ty + 1] = d;
+    }
     __syncthreads();
+
     if (ty == 0) {
-      // merge bdy
       prefill_softmax_state_t<vec_size, T> st;
       st.init();
 #pragma unroll
-      for (int i = 0; i < bdy; i++) {
+      for (int i = 0; i < bdy / 2; i++) {
         Load<T, vec_size>(&smem[i * head_dim + vid * vec_size], &load_vec);
         const float m_tmp = md_smem[2 * i], d_tmp = md_smem[2 * i + 1];
         st.merge(load_vec, m_tmp, d_tmp);

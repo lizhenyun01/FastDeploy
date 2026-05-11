@@ -121,8 +121,11 @@ __global__ void config_decode_attn(const int *__restrict__ seq_lens_this_time,
   // already fill all SMs. When splitting is needed, use the LARGEST
   // chunk_size that still creates enough blocks to fill SMs, minimizing
   // merge count while ensuring SM utilization.
-  // Target: at least sm_count blocks to cover all SMs (1 block/SM minimum).
-  const int target_blocks = config_gridx / 4;  // sm_count
+  // Target: at least sm_count*4 blocks to ensure 4+ waves for GPU utilization.
+  // Too few waves (e.g. 2 waves with target=sm_count*2) leaves SMs idle between
+  // waves; 4 waves is a balanced tradeoff between utilization and merge
+  // overhead.
+  const int target_blocks = config_gridx / 4;  // sm_count * 4
   const bool use_scheme_e = (num_block_no_chunk >= target_blocks);
 
   if (use_scheme_e) {
