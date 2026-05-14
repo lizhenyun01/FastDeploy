@@ -291,9 +291,7 @@ environment_variables: dict[str, Callable[[], Any]] = {
     "FD_FP8_QUANT_WITH_POW2SCALE": lambda: bool(int(os.getenv("FD_FP8_QUANT_WITH_POW2SCALE", "0"))),
     # enable kv cache manager v1
     "ENABLE_V1_KVCACHE_MANAGER": lambda: int(os.getenv("ENABLE_V1_KVCACHE_MANAGER", "0")),
-    # When set to 1, print which op / shape enters the block-wise CUDA Graph
-    # during the capture phase. Defaults to 0 (silent).
-    "FD_BLOCK_WISE_DEBUG": lambda: bool(int(os.getenv("FD_BLOCK_WISE_DEBUG", "0"))),
+    "USE_DECODE_UNIFIED_ATTENTION": lambda: bool(int(os.getenv("USE_DECODE_UNIFIED_ATTENTION", "0"))),
 }
 
 
