@@ -83,7 +83,10 @@ __global__ void GetMaxLenKernel(const int* seq_lens_decoder,
   }
 }
 
-template <int min_chunk_size, uint32_t block_size>
+template <int min_chunk_size,
+          int chunk_step,
+          uint32_t block_size,
+          int max_chunk_size>
 __global__ void config_decode_attn(const int* __restrict__ seq_lens_this_time,
                                    const int* __restrict__ seq_lens_encoder,
                                    const int* __restrict__ seq_lens_decoder,
@@ -107,7 +110,10 @@ __global__ void config_decode_attn(const int* __restrict__ seq_lens_this_time,
   // split-KV block counts per lane. Avoids redundant seq_lens reads and
   // shared intermediate values (token_num, kv_len, q_tile_num).
   const int target_blocks = config_gridx / 3;  // sm_count * 3
-  const int cur_chunk_size = min_chunk_size * (lane_id + 1);
+  // Search chunk_size from 512 with step 128: {512, 640, 768, ...}
+
+  const int cur_chunk_size =
+      min(min_chunk_size + lane_id * chunk_step, max_chunk_size);
   int num_block_no_chunk = 0;
   int max_kv_len_no_chunk = 0;
   int num_block_all = 0;
@@ -141,7 +147,7 @@ __global__ void config_decode_attn(const int* __restrict__ seq_lens_this_time,
     for (int i = 0; i < static_cast<int>(block_size); i++) {
       const int nb = num_block_all_shared[i];
       if (nb < target_blocks) continue;
-      const int cs = min_chunk_size * (i + 1);
+      const int cs = min(min_chunk_size + i * chunk_step, max_chunk_size);
       const int w = div_up(nb, target_blocks);
       const int64_t kv_traffic = static_cast<int64_t>(w) * cs;
       if (kv_traffic < kv_traffic_min) {
@@ -158,7 +164,7 @@ __global__ void config_decode_attn(const int* __restrict__ seq_lens_this_time,
       for (int i = block_size - 1; i >= 0; i--) {
         const int nb = num_block_all_shared[i];
         if (nb < target_blocks) continue;
-        const int cs = min_chunk_size * (i + 1);
+        const int cs = min(min_chunk_size + i * chunk_step, max_chunk_size);
         const int w = div_up(nb, target_blocks);
         const int64_t kv_traffic = static_cast<int64_t>(w) * cs;
         if (kv_traffic <= kv_traffic_min + kv_traffic_min / 4) {
@@ -322,7 +328,7 @@ void ConfigForAttention(
     // and block_num * 4 ints = block_num int4s, so the reinterpret is valid.
     int4* block_indices_i4 = reinterpret_cast<int4*>(block_indices.data<int>());
     if (cache_quant_type == "cache_int4_zp") {
-      config_decode_attn<256, 128>
+      config_decode_attn<512, 256, 128, 32768>
           <<<1, blocks, 0, stream>>>(seq_lens_this_time.data<int>(),
                                      seq_lens_encoder.data<int>(),
                                      seq_lens_decoder.data<int>(),
@@ -336,7 +342,7 @@ void ConfigForAttention(
                                      max_tokens_per_batch,
                                      config_gridx);
     } else {
-      config_decode_attn<128, 128>
+      config_decode_attn<512, 128, 128, 16384>
           <<<1, blocks, 0, stream>>>(seq_lens_this_time.data<int>(),
                                      seq_lens_encoder.data<int>(),
                                      seq_lens_decoder.data<int>(),
