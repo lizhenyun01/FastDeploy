@@ -244,6 +244,8 @@ environment_variables: dict[str, Callable[[], Any]] = {
     "FD_DETERMINISTIC_SPLIT_KV_SIZE": lambda: _validate_split_kv_size(
         int(os.getenv("FD_DETERMINISTIC_SPLIT_KV_SIZE", "16"))
     ),
+    # Whether to use unified attention kernel in mix
+    "USE_DECODE_UNIFIED_ATTENTION": lambda: bool(int(os.getenv("USE_DECODE_UNIFIED_ATTENTION", "0"))),
     # Enable determinism logging (print MD5 hashes and debug info)
     "FD_DETERMINISTIC_LOG_MODE": lambda: bool(int(os.getenv("FD_DETERMINISTIC_LOG_MODE", "0"))),
     # Whether to use PD REORDER, can set 0 or 1
@@ -291,7 +293,6 @@ environment_variables: dict[str, Callable[[], Any]] = {
     "FD_FP8_QUANT_WITH_POW2SCALE": lambda: bool(int(os.getenv("FD_FP8_QUANT_WITH_POW2SCALE", "0"))),
     # enable kv cache manager v1
     "ENABLE_V1_KVCACHE_MANAGER": lambda: int(os.getenv("ENABLE_V1_KVCACHE_MANAGER", "0")),
-    "USE_DECODE_UNIFIED_ATTENTION": lambda: bool(int(os.getenv("USE_DECODE_UNIFIED_ATTENTION", "0"))),
 }
 
 
