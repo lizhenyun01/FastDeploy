@@ -63,8 +63,8 @@ environment_variables: dict[str, Callable[[], Any]] = {
     "FD_ZMQ_SNDHWM": lambda: os.getenv("FD_ZMQ_SNDHWM", 0),
     # cache kv quant params directory
     "FD_CACHE_PARAMS": lambda: os.getenv("FD_CACHE_PARAMS", "none"),
-    # Set attention backend. "NATIVE_ATTN", "APPEND_ATTN"
-    # and "MLA_ATTN" can be set currently.
+    # Set attention backend. "NATIVE_ATTN", "APPEND_ATTN", "DECODE_UNIFIED_ATTN",
+    # "FLASH_ATTN" and "MLA_ATTN" can be set currently.
     "FD_ATTENTION_BACKEND": lambda: os.getenv("FD_ATTENTION_BACKEND", "APPEND_ATTN"),
     # Set sampling class. "base", "base_non_truncated", "air", "rejection" and "triton" can be set currently.
     "FD_SAMPLING_CLASS": lambda: os.getenv("FD_SAMPLING_CLASS", "base"),

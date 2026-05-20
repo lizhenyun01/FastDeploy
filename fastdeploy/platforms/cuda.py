@@ -79,5 +79,5 @@ class CUDAPlatform(Platform):
         else:
             raise ValueError(
                 "Invalid attention backend you specified.\n"
-                "Now only support [NATIVE_ATTN, MLA_ATTN, APPEND_ATTN] in cuda place."
+                "Now only support [NATIVE_ATTN, MLA_ATTN, APPEND_ATTN, FLASH_ATTN, DECODE_UNIFIED_ATTNmax_len_tensor_cpu] in cuda place."
             )

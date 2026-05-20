@@ -553,48 +553,6 @@ class TestDecodeUnifiedAttentionC16(unittest.TestCase):
         out_ref = remove_padding(dec_seq_lens_this_time, dec_cu_seqlens_q, out_ref, dec_token_num)
         return out_ref
 
-    def test_naive_vs_append_attention_decode(self):
-        """Test: prefill with append_attention, then decode with append_attention. Compare to naive."""
-        # Step 1: Prefill
-        cache_k, cache_v = self.do_prefill_with_append_attention()
-
-        # Step 2: Naive reference for decode
-        out_ref = self.compute_naive_decode_ref(cache_k, cache_v)
-
-        # Step 3: Decode with append_attention
-        # seq_lens_this_time must match qkv rows: batch_size * max_tokens_per_batch
-        dec_seq_lens_encoder = paddle.to_tensor([0] * self.batch_size, "int32")
-        dec_seq_lens_decoder = paddle.to_tensor([self.seq_len] * self.batch_size, "int32")
-        dec_seq_lens_this_time = paddle.to_tensor([self.max_tokens_per_batch] * self.batch_size, "int32")
-
-        dec_batch_id_per_token, dec_cu_seqlens_q, _ = get_padding_offset(self.batch_size, dec_seq_lens_this_time)
-
-        out_dec, _, _ = self.run_append_attention(
-            self.dec_qkv,
-            cache_k,
-            cache_v,
-            dec_seq_lens_encoder,
-            dec_seq_lens_decoder,
-            dec_seq_lens_this_time,
-            dec_batch_id_per_token,
-            dec_cu_seqlens_q,
-        )
-
-        out_ref_f = out_ref.astype("float32").numpy()
-        out_dec_f = out_dec.astype("float32").numpy()
-
-        # Truncate to actual token count (output may be padded to max_tokens_per_batch)
-        dec_token_num = self.batch_size
-        out_dec_f = out_dec_f[:dec_token_num]
-
-        np.testing.assert_allclose(
-            out_dec_f,
-            out_ref_f,
-            rtol=1e-02,
-            atol=1e-02,
-            err_msg="append_attention decode output doesn't match naive reference",
-        )
-
     def test_naive_vs_decode_unified_attention(self):
         """Test: prefill with append_attention, then decode with new split decode ops."""
         # Step 1: Prefill
@@ -715,14 +673,6 @@ class TestDecodeUnifiedAttentionC16Speculate(TestDecodeUnifiedAttentionC16):
         self.seq_len = 6400
         self.max_model_len = self.seq_len + 128
         self.init_tensor()
-
-    def test_naive_vs_append_attention_decode(self):
-        """Skip: naive ref only computes 1 token, but ops compute max_tokens_per_batch tokens."""
-        pass
-
-    def test_naive_vs_decode_unified_attention(self):
-        """Skip: naive ref only computes 1 token, but ops compute max_tokens_per_batch tokens."""
-        pass
 
 
 class TestDecodeUnifiedAttentionC16MultiBatch(TestDecodeUnifiedAttentionC16):
@@ -854,10 +804,6 @@ class TestDecodeUnifiedAttentionC16MultiBatchSpeculate(TestDecodeUnifiedAttentio
         self.seq_len = 6400
         self.max_model_len = self.seq_len + 128
         self.init_tensor()
-
-    def test_naive_vs_append_attention_decode(self):
-        """Skip: naive ref only computes 1 token, but ops compute max_tokens_per_batch tokens."""
-        pass
 
     def test_naive_vs_decode_unified_attention(self):
         """Skip: naive ref only computes 1 token, but ops compute max_tokens_per_batch tokens."""

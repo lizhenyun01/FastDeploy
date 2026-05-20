@@ -79,7 +79,7 @@ def allocate_decode_unified_related_buffer(
     res = {}
 
     # Decode unified attention split ops buffers
-    res["max_len_tensor_cpu"] = paddle.full([9], 0, dtype="int32").cpu()
+    res["max_len_tensor_cpu"] = paddle.full([6], 0, dtype="int32").cpu()
     min_chunk_size = 512
     max_num_chunk = (max_model_len + min_chunk_size - 1) // min_chunk_size
     q_tile_size = 16

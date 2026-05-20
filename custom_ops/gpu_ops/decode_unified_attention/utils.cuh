@@ -137,6 +137,7 @@ struct type_traits<__nv_fp8x2_e4m3> {
 inline __device__ static void convert_fp8(half* result,
                                           const uint32_t& source) {
   printf("Do not support fp8 to half although it's very easy.\n");
+  asm("trap;");
 }
 
 inline __device__ static void convert_fp8(__nv_bfloat16* result,
@@ -558,26 +559,6 @@ struct StoreFunc<T, VEC_SIZE, T> {
     __VA_ARGS__                                              \
   } else if (group_size == 7) {                              \
     constexpr size_t GROUP_SIZE = 7;                         \
-    __VA_ARGS__                                              \
-  } else if (group_size == 8) {                              \
-    constexpr size_t GROUP_SIZE = 8;                         \
-    __VA_ARGS__                                              \
-  } else if (group_size == 12) {                             \
-    constexpr size_t GROUP_SIZE = 12;                        \
-    __VA_ARGS__                                              \
-  } else if (group_size == 14) {                             \
-    constexpr size_t GROUP_SIZE = 14;                        \
-    __VA_ARGS__                                              \
-  } else if (group_size == 16) {                             \
-    constexpr size_t GROUP_SIZE = 16;                        \
-    __VA_ARGS__                                              \
-  } else {                                                   \
-    PD_THROW("not support the group_size", group_size);      \
-  }
-
-#define DISPATCH_GQA_GROUP_SIZE(group_size, GROUP_SIZE, ...) \
-  if (group_size == 1) {                                     \
-    constexpr size_t GROUP_SIZE = 1;                         \
     __VA_ARGS__                                              \
   } else if (group_size == 8) {                              \
     constexpr size_t GROUP_SIZE = 8;                         \
