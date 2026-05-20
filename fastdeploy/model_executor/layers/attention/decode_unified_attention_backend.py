@@ -55,7 +55,6 @@ class DecodeUnifiedAttentionMetadata(AttentionMetadata):
     kv_signal_data_list: List[Optional[paddle.Tensor]] = field(default_factory=list)
 
     _fuse_kernel_compute_dtype: str = "bf16"
-    _dtype: paddle.dtype = paddle.bfloat16
 
 
 def allocate_decode_unified_related_buffer(
