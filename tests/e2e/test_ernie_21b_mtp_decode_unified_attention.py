@@ -32,7 +32,7 @@ from utils.serving_utils import (
 )
 
 os.environ["FD_ATTENTION_BACKEND"] = "FLASH_ATTN"
-os.environ["FD_PD_REORDER"] = "1"
+os.environ["USE_DECODE_UNIFIED_ATTENTION"] = "1"
 
 
 @pytest.fixture(scope="session", autouse=True)
