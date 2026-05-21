@@ -280,7 +280,6 @@ class FlashAttentionBackend(AttentionBackend):
         self.max_tokens_per_batch: int = self.speculate_max_draft_token_num + 1
         if FLASH_ATTN_VERSION is None:
             init_flash_attn_version()
-        print(f"num_heads: {self.num_heads}, kv_num_heads: {self.kv_num_heads}")
 
     def get_attention_meta(self):
         """get_attention_meta"""

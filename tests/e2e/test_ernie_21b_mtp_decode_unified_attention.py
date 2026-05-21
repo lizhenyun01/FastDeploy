@@ -32,6 +32,7 @@ from utils.serving_utils import (
 )
 
 os.environ["FD_ATTENTION_BACKEND"] = "FLASH_ATTN"
+os.environ["FLAGS_flash_attn_version"] = "3"
 os.environ["USE_DECODE_UNIFIED_ATTENTION"] = "1"
 
 

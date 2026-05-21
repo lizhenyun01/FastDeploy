@@ -112,6 +112,7 @@ def setup_and_run_server():
     env_prefill = os.environ.copy()
     env_prefill["CUDA_VISIBLE_DEVICES"] = "0"
     env_prefill["FD_ATTENTION_BACKEND"] = "FLASH_ATTN"
+    env_prefill["FLAGS_flash_attn_version"] = "3"
     env_prefill["FD_LOG_DIR"] = os.path.join(base_log_dir, "log_prefill")
     prefill_log_path = "prefill.log"
     prefill_cmd = [
