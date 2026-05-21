@@ -342,17 +342,26 @@ def test_mtp_accept_ratio(api_url):
         print(f"解析失败: {e}")
     print("\nresult:\n", result)
 
-    base_path = os.getenv("MODEL_PATH")
-    baseline_path = os.path.join(base_path, "21b_mtp_accept_ratio_baseline_dev_0311.txt")
-    with open(baseline_path, "r", encoding="utf-8") as f:
-        baseline = f.read()
+    baseline = (
+        "国外项目风险管理研究起步早、体系成熟。"
+        "早期聚焦保险与金融领域，后拓展至多领域。"
+        "理论层面，COSO《企业风险管理——整合框架》及ISO31000标准提供系统性指导，"
+        "强调全流程管理。"
+        "风险识别方法多样，如故障树、事件树分析；"
+        "评估常用VaR模型、蒙特卡洛模拟等量化工具。"
+        "应对策略丰富，涵盖规避、转移等基本策略及风险共享、升级等复杂策略。"
+        "组织文化与管理层支持对风险管理有效性影响大。"
+        "近年来，科技发展促使人工智能、大数据等融入，"
+        "推动风险管理向智能化、自动化迈进 。"
+    )
+
     baseline_ratio = {
-        "accepted_tokens": 131,
-        "rejected_tokens": 23,
-        "accept_ratio": 0.4122137404580153,
-        "average_accept_length": 1.7012987012987013,
-        "accepted_tokens_per_head": [77, 54],
-        "accept_ratio_per_head": [0.7012987012987013],
+        "accepted_tokens": 130,
+        "rejected_tokens": 20,
+        "accept_ratio": 0.42307692307692313,
+        "average_accept_length": 1.7333333333333334,
+        "accepted_tokens_per_head": [75, 55],
+        "accept_ratio_per_head": [0.7333333333333333],
     }
 
     response = send_request(url=api_url, payload=payload)
