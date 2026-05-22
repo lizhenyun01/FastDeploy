@@ -49,7 +49,7 @@ template <typename T,
           bool is_scale_channel_wise = false,
           bool IsFP8 = false,
           bool IsDynamicC8 = false>
-__global__ void decode_append_attention_c8_kernel(
+__global__ void decode_unified_attention_c8_kernel(
     AttentionParams<T, CacheT> params) {
   const uint32_t tid = threadIdx.x, wid = threadIdx.y;
 
@@ -85,15 +85,15 @@ __global__ void decode_append_attention_c8_kernel(
              NUM_WARP_KV * num_frags_z * 16 * HEAD_DIM * sizeof(CacheT));
   smem_t k_scale_smem;
   smem_t v_scale_smem;
-  T *k_smem_scale_ptr = nullptr;
-  T *v_smem_scale_ptr = nullptr;
+  T* k_smem_scale_ptr = nullptr;
+  T* v_smem_scale_ptr = nullptr;
 
   int total_block = params.num_blocks_ptr[0];
   int chunk_size = params.chunk_size_ptr[0];
 
   for (int lane_idx = blockIdx.x; lane_idx < total_block;
        lane_idx += gridDim.x) {
-    int4 indices = reinterpret_cast<const int4 *>(block_indices)[lane_idx];
+    int4 indices = reinterpret_cast<const int4*>(block_indices)[lane_idx];
     int batch_idx = indices.x;
     int kv_head_idx = indices.y;
     int chunk_idx = indices.z;
@@ -101,7 +101,7 @@ __global__ void decode_append_attention_c8_kernel(
     int q_head_idx = kv_head_idx * GROUP_SIZE;
 
     const uint32_t q_len = seq_lens_q[batch_idx];
-    const int *block_table_now =
+    const int* block_table_now =
         block_table + batch_idx * params.max_blocks_per_seq;
 
     T cache_k_scale_reg[IsDynamicC8
@@ -113,7 +113,7 @@ __global__ void decode_append_attention_c8_kernel(
     if constexpr (!IsDynamicC8) {
       if constexpr (is_scale_channel_wise) {
         int scale_col_base = threadIdx.x % 4 * 2 + kv_head_idx * HEAD_DIM;
-        const T *cache_k_scale_cur_head = cache_k_scale + scale_col_base;
+        const T* cache_k_scale_cur_head = cache_k_scale + scale_col_base;
         for (int i = 0; i < num_frags_y; ++i) {
           const int scale_idx = i * 16;
           cache_k_scale_reg[i * 4] = cache_k_scale_cur_head[scale_idx];
@@ -122,7 +122,7 @@ __global__ void decode_append_attention_c8_kernel(
           cache_k_scale_reg[i * 4 + 3] = cache_k_scale_cur_head[scale_idx + 9];
         }
         scale_col_base = threadIdx.x / 4 + kv_head_idx * HEAD_DIM;
-        const T *cache_v_scale_cur_head = cache_v_scale + scale_col_base;
+        const T* cache_v_scale_cur_head = cache_v_scale + scale_col_base;
         for (int i = 0; i < num_frags_y; ++i) {
           const int scale_idx = i * 16;
           cache_v_scale_reg[i * 2] = cache_v_scale_cur_head[scale_idx];
@@ -159,7 +159,7 @@ __global__ void decode_append_attention_c8_kernel(
     float m_frag[num_frags_x][2];
     float d_frag[num_frags_x][2];
 
-    T *o_base_ptr_T = nullptr;
+    T* o_base_ptr_T = nullptr;
 
     const uint32_t chunk_start = chunk_idx * chunk_size;
     const uint32_t chunk_end = min(kv_len, chunk_start + chunk_size);
@@ -172,16 +172,16 @@ __global__ void decode_append_attention_c8_kernel(
     const uint32_t q_offset = q_start_seq_id * q_ori_n_stride +
                               q_head_idx * HEAD_DIM +
                               tid % 8 * num_elems_per_128b<T>();
-    T *q_base_ptr = qkv + q_offset;
+    T* q_base_ptr = qkv + q_offset;
 
     o_base_ptr_T = tmp_o +
                    batch_idx * params.max_tokens_per_batch *
                        params.max_num_chunks * q_n_stride +
                    chunk_idx * q_n_stride + q_head_idx * HEAD_DIM +
                    tid % 8 * num_elems_per_128b<T>();
-    const int *mask_offset_this_seq =
+    const int* mask_offset_this_seq =
         mask_offset ? mask_offset + q_start_seq_id * 2 : nullptr;
-    const bool *attn_mask_this_seq =
+    const bool* attn_mask_this_seq =
         attn_mask ? attn_mask +
                         batch_idx * params.attn_mask_len * params.attn_mask_len
                   : nullptr;
@@ -206,12 +206,12 @@ __global__ void decode_append_attention_c8_kernel(
         &qo_smem, softmax_scale);
 
     if constexpr (IsDynamicC8) {
-      k_smem_scale_ptr = reinterpret_cast<T *>(
+      k_smem_scale_ptr = reinterpret_cast<T*>(
           smem + num_frags_x * 16 * HEAD_DIM * sizeof(T) +
           NUM_WARP_KV * num_frags_z * 16 * HEAD_DIM * sizeof(CacheT) * 2);
       v_smem_scale_ptr = k_smem_scale_ptr + NUM_WARP_KV * num_frags_z * 16;
-      k_scale_smem.base = reinterpret_cast<b128_t *>(k_smem_scale_ptr);
-      v_scale_smem.base = reinterpret_cast<b128_t *>(v_smem_scale_ptr);
+      k_scale_smem.base = reinterpret_cast<b128_t*>(k_smem_scale_ptr);
+      v_scale_smem.base = reinterpret_cast<b128_t*>(v_smem_scale_ptr);
     }
 
     const uint32_t num_iterations =
@@ -456,14 +456,13 @@ __global__ void decode_append_attention_c8_kernel(
     wait_group<0>();
     __syncthreads();
     const bool do_normalize = (num_chunks_this_seq <= 1);
-    merge_block_res<num_frags_x, num_frags_y, T>(
-        o_frag,
-        reinterpret_cast<float *>(smem),
-        m_frag,
-        d_frag,
-        wid,
-        tid,
-        do_normalize);
+    merge_block_res<num_frags_x, num_frags_y, T>(o_frag,
+                                                 reinterpret_cast<float*>(smem),
+                                                 m_frag,
+                                                 d_frag,
+                                                 wid,
+                                                 tid,
+                                                 do_normalize);
 
     write_o_reg_gmem_multi_warps<GROUP_SIZE, num_frags_x, num_frags_y, T>(
         o_frag,
@@ -511,34 +510,34 @@ template <typename T,
           uint32_t Q_TILE_SIZE,
           bool IsFP8,
           bool IsDynamicC8>
-void DecodeAppendC8Attention(const AppendAttnMetaData &meta_data,
-                             const paddle::Tensor &qkv,
-                             const paddle::Tensor &cache_k,
-                             const paddle::Tensor &cache_v,
-                             const paddle::Tensor &tmp_workspace,
-                             const paddle::Tensor &tmp_m,
-                             const paddle::Tensor &tmp_d,
-                             const paddle::optional<paddle::Tensor> &attn_mask,
-                             const paddle::Tensor &cache_k_scale,
-                             const paddle::Tensor &cache_v_scale,
-                             const paddle::optional<paddle::Tensor> &sinks,
-                             const paddle::Tensor &seq_lens_q,
-                             const paddle::Tensor &seq_lens_kv,
-                             const paddle::Tensor &seq_lens_encoder,
-                             const paddle::Tensor &batch_id_per_token,
-                             const paddle::Tensor &cu_seqlens_q,
-                             const paddle::Tensor &block_table,
-                             const paddle::Tensor &block_indices,
-                             const paddle::Tensor &num_blocks,
-                             const paddle::Tensor &chunk_size,
-                             const int max_seq_len,
-                             const int max_dec_len,
-                             const float quant_max_bound,
-                             const float quant_min_bound,
-                             const int max_tokens_per_batch,
-                             cudaStream_t &stream,
-                             paddle::Tensor *out,
-                             const int sliding_window) {
+void DecodeUnifiedC8Attention(const AppendAttnMetaData& meta_data,
+                              const paddle::Tensor& qkv,
+                              const paddle::Tensor& cache_k,
+                              const paddle::Tensor& cache_v,
+                              const paddle::Tensor& tmp_workspace,
+                              const paddle::Tensor& tmp_m,
+                              const paddle::Tensor& tmp_d,
+                              const paddle::optional<paddle::Tensor>& attn_mask,
+                              const paddle::Tensor& cache_k_scale,
+                              const paddle::Tensor& cache_v_scale,
+                              const paddle::optional<paddle::Tensor>& sinks,
+                              const paddle::Tensor& seq_lens_q,
+                              const paddle::Tensor& seq_lens_kv,
+                              const paddle::Tensor& seq_lens_encoder,
+                              const paddle::Tensor& batch_id_per_token,
+                              const paddle::Tensor& cu_seqlens_q,
+                              const paddle::Tensor& block_table,
+                              const paddle::Tensor& block_indices,
+                              const paddle::Tensor& num_blocks,
+                              const paddle::Tensor& chunk_size,
+                              const int max_seq_len,
+                              const int max_dec_len,
+                              const float quant_max_bound,
+                              const float quant_min_bound,
+                              const int max_tokens_per_batch,
+                              cudaStream_t& stream,
+                              paddle::Tensor* out,
+                              const int sliding_window) {
   using NV_TYPE = typename type_traits<T>::nv_type;
 
   auto num_heads = meta_data.q_num_heads;
@@ -552,7 +551,7 @@ void DecodeAppendC8Attention(const AppendAttnMetaData &meta_data,
   constexpr uint32_t num_frags_x = Q_TILE_SIZE / (16 * NUM_WARP_Q);
   constexpr uint32_t num_frags_y = HEAD_DIM / 16;
 
-  auto *allocator = paddle::GetAllocator(qkv.place());
+  auto* allocator = paddle::GetAllocator(qkv.place());
 
   bool is_scale_channel_wise = false;
   if (cache_k_scale.dims()[0] == HEAD_DIM * kv_num_heads) {
@@ -570,37 +569,37 @@ void DecodeAppendC8Attention(const AppendAttnMetaData &meta_data,
   constexpr uint32_t smem_size =
       smem_size_0 > smem_size_1 ? smem_size_0 : smem_size_1;
 
-  auto split_kv_kernel = decode_append_attention_c8_kernel<NV_TYPE,
-                                                           uint8_t,
-                                                           GROUP_SIZE,
-                                                           CAUSAL,
-                                                           NUM_WARPS_PER_BLOCK,
-                                                           NUM_WARP_Q,
-                                                           NUM_WARP_KV,
-                                                           HEAD_DIM,
-                                                           BLOCK_SIZE,
-                                                           num_frags_x,
-                                                           num_frags_z,
-                                                           num_frags_y,
-                                                           false,
-                                                           IsFP8,
-                                                           IsDynamicC8>;
+  auto split_kv_kernel = decode_unified_attention_c8_kernel<NV_TYPE,
+                                                            uint8_t,
+                                                            GROUP_SIZE,
+                                                            CAUSAL,
+                                                            NUM_WARPS_PER_BLOCK,
+                                                            NUM_WARP_Q,
+                                                            NUM_WARP_KV,
+                                                            HEAD_DIM,
+                                                            BLOCK_SIZE,
+                                                            num_frags_x,
+                                                            num_frags_z,
+                                                            num_frags_y,
+                                                            false,
+                                                            IsFP8,
+                                                            IsDynamicC8>;
   if (is_scale_channel_wise) {
-    split_kv_kernel = decode_append_attention_c8_kernel<NV_TYPE,
-                                                        uint8_t,
-                                                        GROUP_SIZE,
-                                                        CAUSAL,
-                                                        NUM_WARPS_PER_BLOCK,
-                                                        NUM_WARP_Q,
-                                                        NUM_WARP_KV,
-                                                        HEAD_DIM,
-                                                        BLOCK_SIZE,
-                                                        num_frags_x,
-                                                        num_frags_z,
-                                                        num_frags_y,
-                                                        true,
-                                                        IsFP8,
-                                                        IsDynamicC8>;
+    split_kv_kernel = decode_unified_attention_c8_kernel<NV_TYPE,
+                                                         uint8_t,
+                                                         GROUP_SIZE,
+                                                         CAUSAL,
+                                                         NUM_WARPS_PER_BLOCK,
+                                                         NUM_WARP_Q,
+                                                         NUM_WARP_KV,
+                                                         HEAD_DIM,
+                                                         BLOCK_SIZE,
+                                                         num_frags_x,
+                                                         num_frags_z,
+                                                         num_frags_y,
+                                                         true,
+                                                         IsFP8,
+                                                         IsDynamicC8>;
   }
   if (smem_size >= 48 * 1024) {
     cudaFuncSetAttribute(split_kv_kernel,
@@ -611,7 +610,7 @@ void DecodeAppendC8Attention(const AppendAttnMetaData &meta_data,
   int sm_count;
   cudaDeviceGetAttribute(&sm_count, cudaDevAttrMultiProcessorCount, dev_id);
 
-  const int max_num_chunks = div_up(max_seq_len, 128);
+  const int max_num_chunks = div_up(max_seq_len, 512);
   uint32_t attn_mask_len;
   if (attn_mask) {
     attn_mask_len = attn_mask.get().shape()[1];
@@ -622,23 +621,23 @@ void DecodeAppendC8Attention(const AppendAttnMetaData &meta_data,
   AttentionParams<NV_TYPE, uint8_t> params;
   memset(&params, 0, sizeof(AttentionParams<NV_TYPE, uint8_t>));
 
-  params.qkv = reinterpret_cast<NV_TYPE *>(const_cast<T *>(qkv.data<T>()));
-  params.cache_k = const_cast<uint8_t *>(cache_k.data<uint8_t>());
-  params.cache_v = const_cast<uint8_t *>(cache_v.data<uint8_t>());
+  params.qkv = reinterpret_cast<NV_TYPE*>(const_cast<T*>(qkv.data<T>()));
+  params.cache_k = const_cast<uint8_t*>(cache_k.data<uint8_t>());
+  params.cache_v = const_cast<uint8_t*>(cache_v.data<uint8_t>());
   params.cache_k_scale =
-      reinterpret_cast<NV_TYPE *>(const_cast<T *>(cache_k_scale.data<T>()));
+      reinterpret_cast<NV_TYPE*>(const_cast<T*>(cache_k_scale.data<T>()));
   params.cache_v_scale =
-      reinterpret_cast<NV_TYPE *>(const_cast<T *>(cache_v_scale.data<T>()));
-  params.seq_lens_q = const_cast<int *>(seq_lens_q.data<int>());
-  params.seq_lens_kv = const_cast<int *>(seq_lens_kv.data<int>());
-  params.block_indices = const_cast<int *>(block_indices.data<int>());
-  params.num_blocks_ptr = const_cast<int *>(num_blocks.data<int>());
-  params.chunk_size_ptr = const_cast<int *>(chunk_size.data<int>());
-  params.cu_seqlens_q = const_cast<int *>(cu_seqlens_q.data<int>());
-  params.block_table = const_cast<int *>(block_table.data<int>());
-  params.mask_offset = const_cast<int *>(meta_data.mask_offset);
+      reinterpret_cast<NV_TYPE*>(const_cast<T*>(cache_v_scale.data<T>()));
+  params.seq_lens_q = const_cast<int*>(seq_lens_q.data<int>());
+  params.seq_lens_kv = const_cast<int*>(seq_lens_kv.data<int>());
+  params.block_indices = const_cast<int*>(block_indices.data<int>());
+  params.num_blocks_ptr = const_cast<int*>(num_blocks.data<int>());
+  params.chunk_size_ptr = const_cast<int*>(chunk_size.data<int>());
+  params.cu_seqlens_q = const_cast<int*>(cu_seqlens_q.data<int>());
+  params.block_table = const_cast<int*>(block_table.data<int>());
+  params.mask_offset = const_cast<int*>(meta_data.mask_offset);
   params.attn_mask =
-      attn_mask ? const_cast<bool *>(attn_mask.get().data<bool>()) : nullptr;
+      attn_mask ? const_cast<bool*>(attn_mask.get().data<bool>()) : nullptr;
   params.max_model_len = max_dec_len;
   params.max_kv_len = max_dec_len;
   params.max_blocks_per_seq = max_blocks_per_seq;
@@ -646,9 +645,9 @@ void DecodeAppendC8Attention(const AppendAttnMetaData &meta_data,
   params.quant_max_bound = quant_max_bound;
   params.quant_min_bound = quant_min_bound;
   params.tmp_o =
-      reinterpret_cast<NV_TYPE *>(const_cast<T *>(tmp_workspace.data<T>()));
-  params.tmp_m = const_cast<float *>(tmp_m.data<float>());
-  params.tmp_d = const_cast<float *>(tmp_d.data<float>());
+      reinterpret_cast<NV_TYPE*>(const_cast<T*>(tmp_workspace.data<T>()));
+  params.tmp_m = const_cast<float*>(tmp_m.data<float>());
+  params.tmp_d = const_cast<float*>(tmp_d.data<float>());
   params.max_tokens_per_batch = max_tokens_per_batch;
   params.attn_mask_len =
       attn_mask ? attn_mask_len = attn_mask.get().shape()[1] : -1;
@@ -664,7 +663,7 @@ void DecodeAppendC8Attention(const AppendAttnMetaData &meta_data,
   CUDA_CHECK(
       cudaDeviceGetAttribute(&sm_cout, cudaDevAttrMultiProcessorCount, device));
 
-  dim3 grids(sm_cout * 8);
+  dim3 grids(sm_cout * 6);
   dim3 blocks(32, NUM_WARPS_PER_BLOCK);
 
   launchWithPdlWhenEnabled(
@@ -689,13 +688,12 @@ void DecodeAppendC8Attention(const AppendAttnMetaData &meta_data,
       seq_lens_encoder.data<int>(),
       batch_id_per_token.data<int>(),
       cu_seqlens_q.data<int>(),
-      (NV_TYPE *)nullptr,
-      (NV_TYPE *)nullptr,
-      sinks
-          ? reinterpret_cast<NV_TYPE *>(const_cast<T *>(sinks.get().data<T>()))
-          : nullptr,
+      (NV_TYPE*)nullptr,
+      (NV_TYPE*)nullptr,
+      sinks ? reinterpret_cast<NV_TYPE*>(const_cast<T*>(sinks.get().data<T>()))
+            : nullptr,
       chunk_size.data<int>(),
-      reinterpret_cast<NV_TYPE *>(out->data<T>()),
+      reinterpret_cast<NV_TYPE*>(out->data<T>()),
       quant_max_bound,
       quant_min_bound,
       -1,

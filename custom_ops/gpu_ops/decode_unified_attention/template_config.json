@@ -1,8 +1,8 @@
 {
   "multiquery_attention_c8": {
-    "name": "decode_append_attention_c8_kernel",
-    "function_name": "decode_append_attention_c8_kernel",
-    "impl_file": "decode_append_attention_c8_impl.cuh",
+    "name": "decode_unified_attention_c8_kernel",
+    "function_name": "decode_unified_attention_c8_kernel",
+    "impl_file": "decode_unified_attention_c8_impl.cuh",
     "template_params": [
       "T",
       "CacheT",
@@ -38,13 +38,13 @@
       "IsDynamicC8": [0, 1]
     },
     "max_instances_per_file": 80,
-    "file_prefix": "decode_append_attention_c8",
+    "file_prefix": "decode_unified_attention_c8",
     "function_signature": "template __global__ void {function_name}{template_args}(AttentionParams{params_template_args} params);\n\n"
   },
   "multiquery_attention_c16": {
-    "name": "decode_append_attention_c16_kernel",
-    "function_name": "decode_append_attention_c16_kernel",
-    "impl_file": "decode_append_attention_c16_impl.cuh",
+    "name": "decode_unified_attention_c16_kernel",
+    "function_name": "decode_unified_attention_c16_kernel",
+    "impl_file": "decode_unified_attention_c16_impl.cuh",
     "template_params": [
       "T",
       "GROUP_SIZE",
@@ -72,7 +72,7 @@
       "num_frags_y": [8]
     },
     "max_instances_per_file": 80,
-    "file_prefix": "decode_append_attention_c16",
+    "file_prefix": "decode_unified_attention_c16",
     "function_signature": "template __global__ void {function_name}{template_args}(AttentionParams{params_template_args} params);\n\n"
   }
 }

@@ -26,7 +26,7 @@ template <typename T,
           uint32_t num_frags_x,
           uint32_t num_frags_z,
           uint32_t num_frags_y>
-__global__ void decode_append_attention_c16_kernel(
+__global__ void decode_unified_attention_c16_kernel(
     AttentionParams<T, T> params) {
   const uint32_t tid = threadIdx.x, wid = threadIdx.y;
 
@@ -63,7 +63,7 @@ __global__ void decode_append_attention_c16_kernel(
 
   for (int lane_idx = blockIdx.x; lane_idx < total_block;
        lane_idx += gridDim.x) {
-    int4 indices = reinterpret_cast<const int4 *>(block_indices)[lane_idx];
+    int4 indices = reinterpret_cast<const int4*>(block_indices)[lane_idx];
     int batch_idx = indices.x;
     int kv_head_idx = indices.y;
     int chunk_idx = indices.z;
@@ -71,7 +71,7 @@ __global__ void decode_append_attention_c16_kernel(
     int q_head_idx = kv_head_idx * GROUP_SIZE;
 
     const uint32_t q_len = seq_lens_q[batch_idx];
-    const int *block_table_now =
+    const int* block_table_now =
         block_table + batch_idx * params.max_blocks_per_seq;
 
     constexpr uint32_t num_rows_per_block = num_frags_x * 16;
@@ -104,16 +104,16 @@ __global__ void decode_append_attention_c16_kernel(
     const uint32_t q_offset = q_start_seq_id * q_ori_n_stride +
                               q_head_idx * HEAD_DIM +
                               tid % 8 * num_elems_per_128b<T>();
-    T *q_base_ptr = qkv + q_offset;
+    T* q_base_ptr = qkv + q_offset;
 
-    T *o_base_ptr_T = tmp_o +
+    T* o_base_ptr_T = tmp_o +
                       batch_idx * params.max_tokens_per_batch *
                           params.max_num_chunks * q_n_stride +
                       chunk_idx * q_n_stride + q_head_idx * HEAD_DIM +
                       tid % 8 * num_elems_per_128b<T>();
-    const int *mask_offset_this_seq =
+    const int* mask_offset_this_seq =
         mask_offset ? mask_offset + q_start_seq_id * 2 : nullptr;
-    const bool *attn_mask_this_seq =
+    const bool* attn_mask_this_seq =
         attn_mask ? attn_mask +
                         batch_idx * params.attn_mask_len * params.attn_mask_len
                   : nullptr;
@@ -172,8 +172,8 @@ __global__ void decode_append_attention_c16_kernel(
     const uint32_t const_offset = kv_head_idx * kv_h_stride +
                                   (wid * 4 + tid / 8) * kv_b_stride +
                                   tid % 8 * num_elems_per_128b<T>();
-    T *cache_k_now = cache_k + block_id * kv_n_stride + const_offset;
-    T *cache_v_now = cache_v + block_id * kv_n_stride + const_offset;
+    T* cache_k_now = cache_k + block_id * kv_n_stride + const_offset;
+    T* cache_v_now = cache_v + block_id * kv_n_stride + const_offset;
 
     produce_kv_blockwise<SharedMemFillMode::kNoFill,
                          NUM_WARPS,
@@ -279,14 +279,13 @@ __global__ void decode_append_attention_c16_kernel(
     wait_group<0>();
     __syncthreads();
     const bool do_normalize = (num_chunks_this_seq <= 1);
-    merge_block_res<num_frags_x, num_frags_y, T>(
-        o_frag,
-        reinterpret_cast<float *>(smem),
-        m_frag,
-        d_frag,
-        wid,
-        tid,
-        do_normalize);
+    merge_block_res<num_frags_x, num_frags_y, T>(o_frag,
+                                                 reinterpret_cast<float*>(smem),
+                                                 m_frag,
+                                                 d_frag,
+                                                 wid,
+                                                 tid,
+                                                 do_normalize);
 
     write_o_reg_gmem_multi_warps<GROUP_SIZE, num_frags_x, num_frags_y, T>(
         o_frag,
@@ -332,30 +331,31 @@ template <typename T,
           uint32_t BLOCK_SIZE,
           bool CAUSAL,
           uint32_t Q_TILE_SIZE>
-void DecodeAppendC16Attention(const AppendAttnMetaData &meta_data,
-                              const paddle::Tensor &qkv,
-                              const paddle::Tensor &cache_k,
-                              const paddle::Tensor &cache_v,
-                              const paddle::Tensor &tmp_workspace,
-                              const paddle::Tensor &tmp_m,
-                              const paddle::Tensor &tmp_d,
-                              const paddle::optional<paddle::Tensor> &attn_mask,
-                              const paddle::optional<paddle::Tensor> &sinks,
-                              const paddle::Tensor &seq_lens_q,
-                              const paddle::Tensor &seq_lens_kv,
-                              const paddle::Tensor &seq_lens_encoder,
-                              const paddle::Tensor &batch_id_per_token,
-                              const paddle::Tensor &cu_seqlens_q,
-                              const paddle::Tensor &block_table,
-                              const paddle::Tensor &block_indices,
-                              const paddle::Tensor &num_blocks,
-                              const paddle::Tensor &chunk_size,
-                              const int max_seq_len,
-                              const int max_dec_len,
-                              const int max_tokens_per_batch,
-                              cudaStream_t &stream,
-                              paddle::Tensor *out,
-                              const int sliding_window) {
+void DecodeUnifiedC16Attention(
+    const AppendAttnMetaData& meta_data,
+    const paddle::Tensor& qkv,
+    const paddle::Tensor& cache_k,
+    const paddle::Tensor& cache_v,
+    const paddle::Tensor& tmp_workspace,
+    const paddle::Tensor& tmp_m,
+    const paddle::Tensor& tmp_d,
+    const paddle::optional<paddle::Tensor>& attn_mask,
+    const paddle::optional<paddle::Tensor>& sinks,
+    const paddle::Tensor& seq_lens_q,
+    const paddle::Tensor& seq_lens_kv,
+    const paddle::Tensor& seq_lens_encoder,
+    const paddle::Tensor& batch_id_per_token,
+    const paddle::Tensor& cu_seqlens_q,
+    const paddle::Tensor& block_table,
+    const paddle::Tensor& block_indices,
+    const paddle::Tensor& num_blocks,
+    const paddle::Tensor& chunk_size,
+    const int max_seq_len,
+    const int max_dec_len,
+    const int max_tokens_per_batch,
+    cudaStream_t& stream,
+    paddle::Tensor* out,
+    const int sliding_window) {
   using NV_TYPE = typename type_traits<T>::nv_type;
 
   auto num_heads = meta_data.q_num_heads;
@@ -379,17 +379,18 @@ void DecodeAppendC16Attention(const AppendAttnMetaData &meta_data,
   constexpr uint32_t smem_size =
       smem_size_0 > smem_size_1 ? smem_size_0 : smem_size_1;
 
-  auto split_kv_kernel = decode_append_attention_c16_kernel<NV_TYPE,
-                                                            GROUP_SIZE,
-                                                            CAUSAL,
-                                                            NUM_WARPS_PER_BLOCK,
-                                                            NUM_WARP_Q,
-                                                            NUM_WARP_KV,
-                                                            HEAD_DIM,
-                                                            BLOCK_SIZE,
-                                                            num_frags_x,
-                                                            num_frags_z,
-                                                            num_frags_y>;
+  auto split_kv_kernel =
+      decode_unified_attention_c16_kernel<NV_TYPE,
+                                          GROUP_SIZE,
+                                          CAUSAL,
+                                          NUM_WARPS_PER_BLOCK,
+                                          NUM_WARP_Q,
+                                          NUM_WARP_KV,
+                                          HEAD_DIM,
+                                          BLOCK_SIZE,
+                                          num_frags_x,
+                                          num_frags_z,
+                                          num_frags_y>;
   if (smem_size >= 48 * 1024) {
     cudaFuncSetAttribute(split_kv_kernel,
                          cudaFuncAttributeMaxDynamicSharedMemorySize,
@@ -399,7 +400,7 @@ void DecodeAppendC16Attention(const AppendAttnMetaData &meta_data,
   int sm_count;
   cudaDeviceGetAttribute(&sm_count, cudaDevAttrMultiProcessorCount, dev_id);
 
-  const int max_num_chunks = div_up(max_seq_len, 128);
+  const int max_num_chunks = div_up(max_seq_len, 512);
   uint32_t attn_mask_len;
   if (attn_mask) {
     attn_mask_len = attn_mask.get().shape()[1];
@@ -410,29 +411,29 @@ void DecodeAppendC16Attention(const AppendAttnMetaData &meta_data,
   AttentionParams<NV_TYPE, NV_TYPE> params;
   memset(&params, 0, sizeof(AttentionParams<NV_TYPE, NV_TYPE>));
 
-  params.qkv = reinterpret_cast<NV_TYPE *>(const_cast<T *>(qkv.data<T>()));
+  params.qkv = reinterpret_cast<NV_TYPE*>(const_cast<T*>(qkv.data<T>()));
   params.cache_k =
-      reinterpret_cast<NV_TYPE *>(const_cast<T *>(cache_k.data<T>()));
+      reinterpret_cast<NV_TYPE*>(const_cast<T*>(cache_k.data<T>()));
   params.cache_v =
-      reinterpret_cast<NV_TYPE *>(const_cast<T *>(cache_v.data<T>()));
-  params.seq_lens_q = const_cast<int *>(seq_lens_q.data<int>());
-  params.seq_lens_kv = const_cast<int *>(seq_lens_kv.data<int>());
-  params.block_indices = const_cast<int *>(block_indices.data<int>());
-  params.num_blocks_ptr = const_cast<int *>(num_blocks.data<int>());
-  params.chunk_size_ptr = const_cast<int *>(chunk_size.data<int>());
-  params.cu_seqlens_q = const_cast<int *>(cu_seqlens_q.data<int>());
-  params.block_table = const_cast<int *>(block_table.data<int>());
-  params.mask_offset = const_cast<int *>(meta_data.mask_offset);
+      reinterpret_cast<NV_TYPE*>(const_cast<T*>(cache_v.data<T>()));
+  params.seq_lens_q = const_cast<int*>(seq_lens_q.data<int>());
+  params.seq_lens_kv = const_cast<int*>(seq_lens_kv.data<int>());
+  params.block_indices = const_cast<int*>(block_indices.data<int>());
+  params.num_blocks_ptr = const_cast<int*>(num_blocks.data<int>());
+  params.chunk_size_ptr = const_cast<int*>(chunk_size.data<int>());
+  params.cu_seqlens_q = const_cast<int*>(cu_seqlens_q.data<int>());
+  params.block_table = const_cast<int*>(block_table.data<int>());
+  params.mask_offset = const_cast<int*>(meta_data.mask_offset);
   params.attn_mask =
-      attn_mask ? const_cast<bool *>(attn_mask.get().data<bool>()) : nullptr;
+      attn_mask ? const_cast<bool*>(attn_mask.get().data<bool>()) : nullptr;
   params.max_model_len = max_dec_len;
   params.max_kv_len = max_dec_len;
   params.max_blocks_per_seq = max_blocks_per_seq;
   params.softmax_scale = 1.f / sqrt(HEAD_DIM);
   params.tmp_o =
-      reinterpret_cast<NV_TYPE *>(const_cast<T *>(tmp_workspace.data<T>()));
-  params.tmp_m = const_cast<float *>(tmp_m.data<float>());
-  params.tmp_d = const_cast<float *>(tmp_d.data<float>());
+      reinterpret_cast<NV_TYPE*>(const_cast<T*>(tmp_workspace.data<T>()));
+  params.tmp_m = const_cast<float*>(tmp_m.data<float>());
+  params.tmp_d = const_cast<float*>(tmp_d.data<float>());
   params.max_tokens_per_batch = max_tokens_per_batch;
   params.attn_mask_len =
       attn_mask ? attn_mask_len = attn_mask.get().shape()[1] : -1;
@@ -448,7 +449,7 @@ void DecodeAppendC16Attention(const AppendAttnMetaData &meta_data,
   CUDA_CHECK(
       cudaDeviceGetAttribute(&sm_cout, cudaDevAttrMultiProcessorCount, device));
 
-  dim3 grids(sm_cout * 8);
+  dim3 grids(sm_cout * 6);
   dim3 blocks(32, NUM_WARPS_PER_BLOCK);
 
   launchWithPdlWhenEnabled(
@@ -473,13 +474,12 @@ void DecodeAppendC16Attention(const AppendAttnMetaData &meta_data,
       seq_lens_encoder.data<int>(),
       batch_id_per_token.data<int>(),
       cu_seqlens_q.data<int>(),
-      (NV_TYPE *)nullptr,
-      (NV_TYPE *)nullptr,
-      sinks
-          ? reinterpret_cast<NV_TYPE *>(const_cast<T *>(sinks.get().data<T>()))
-          : nullptr,
+      (NV_TYPE*)nullptr,
+      (NV_TYPE*)nullptr,
+      sinks ? reinterpret_cast<NV_TYPE*>(const_cast<T*>(sinks.get().data<T>()))
+            : nullptr,
       chunk_size.data<int>(),
-      reinterpret_cast<NV_TYPE *>(out->data<T>()),
+      reinterpret_cast<NV_TYPE*>(out->data<T>()),
       0.f,
       0.f,
       -1,

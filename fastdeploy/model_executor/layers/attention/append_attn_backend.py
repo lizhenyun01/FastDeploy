@@ -111,8 +111,8 @@ def allocate_launch_related_buffer(
     res["kv_num_blocks_x_cpu"] = paddle.full([1], 0, dtype="int32").cpu()
 
     # Decode attention split ops buffers
-    if envs.USE_DECODE_ATTENTION:
-        min_chunk_size = 128
+    if envs.USE_DECODE_UNIFIED_ATTENTION:
+        min_chunk_size = 512
         max_num_chunk = (max_model_len + min_chunk_size - 1) // min_chunk_size
         q_tile_size = 16 if decoder_step_token_num * group_size <= 16 else 32
         q_tile_num = (decoder_step_token_num * group_size + q_tile_size - 1) // q_tile_size

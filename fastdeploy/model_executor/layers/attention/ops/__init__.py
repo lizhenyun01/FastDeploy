@@ -16,7 +16,7 @@
 
 from .append_attention import append_attention, append_attention_with_output
 from .config_for_attention import config_for_attention
-from .decode_append_attention import decode_append_attention
+from .decode_unified_attention import decode_unified_attention
 from .decoder_write_cache_with_rope import decoder_write_cache_with_rope
 from .flash_attn_v4 import flash_attn_v4
 from .flash_mask_attention import flash_mask_attention
@@ -42,5 +42,5 @@ __all__ = [
     "get_attn_mask_q",
     "config_for_attention",
     "decoder_write_cache_with_rope",
-    "decode_append_attention",
+    "decode_unified_attention",
 ]

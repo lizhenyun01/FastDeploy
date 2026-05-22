@@ -22,11 +22,11 @@ from fastdeploy.platforms import current_platform
 
 if current_platform.is_cuda():
     from fastdeploy.model_executor.ops.gpu import (
-        decode_append_attention as decode_append_attention_cuda,
+        decode_unified_attention as decode_unified_attention_cuda,
     )
 
 
-def decode_append_attention(
+def decode_unified_attention(
     qkv: paddle.Tensor,
     key_cache: paddle.Tensor,
     value_cache: paddle.Tensor,
@@ -65,7 +65,7 @@ def decode_append_attention(
     append_attention
     """
     if current_platform.is_cuda():
-        out = decode_append_attention_cuda(
+        out = decode_unified_attention_cuda(
             qkv,
             key_cache,
             value_cache,

@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "append_attention/decode_append_attention_c8_impl.cuh"
-#include "append_attention/decode_append_attention_c16_impl.cuh"
+#include "decode_unified_attention/decode_unified_attention_c8_impl.cuh"
+#include "decode_unified_attention/decode_unified_attention_c16_impl.cuh"
 
 #ifndef PD_BUILD_STATIC_OP
 #define PD_BUILD_STATIC_OP(name) PD_BUILD_OP(static_op_##name)
@@ -34,7 +34,7 @@ class type2value<phi::dtype::float16> {
   static constexpr paddle::DataType value = paddle::DataType::FLOAT16;
 };
 
-std::vector<paddle::Tensor> DecodeAppendAttention(
+std::vector<paddle::Tensor> DecodeUnifiedAttention(
     const paddle::Tensor& qkv,
     const paddle::Tensor& key_cache,
     const paddle::Tensor& value_cache,
@@ -119,12 +119,12 @@ std::vector<paddle::Tensor> DecodeAppendAttention(
                           group_size, max_tokens_per_batch, Q_TILE_SIZE, {
                             switch (qkv.dtype()) {
                               case paddle::DataType::BFLOAT16: {
-                                DecodeAppendC16Attention<paddle::bfloat16,
-                                                         GROUP_SIZE,
-                                                         HEAD_DIM,
-                                                         BLOCK_SIZE,
-                                                         CAUSAL,
-                                                         Q_TILE_SIZE>(
+                                DecodeUnifiedC16Attention<paddle::bfloat16,
+                                                          GROUP_SIZE,
+                                                          HEAD_DIM,
+                                                          BLOCK_SIZE,
+                                                          CAUSAL,
+                                                          Q_TILE_SIZE>(
                                     meta_data,
                                     qkv,
                                     key_cache,
@@ -152,12 +152,12 @@ std::vector<paddle::Tensor> DecodeAppendAttention(
                                 break;
                               }
                               case paddle::DataType::FLOAT16: {
-                                DecodeAppendC16Attention<paddle::float16,
-                                                         GROUP_SIZE,
-                                                         HEAD_DIM,
-                                                         BLOCK_SIZE,
-                                                         CAUSAL,
-                                                         Q_TILE_SIZE>(
+                                DecodeUnifiedC16Attention<paddle::float16,
+                                                          GROUP_SIZE,
+                                                          HEAD_DIM,
+                                                          BLOCK_SIZE,
+                                                          CAUSAL,
+                                                          Q_TILE_SIZE>(
                                     meta_data,
                                     qkv,
                                     key_cache,
@@ -214,14 +214,14 @@ std::vector<paddle::Tensor> DecodeAppendAttention(
                               {DISPATCH_IS_FP8(is_fp8, IsFP8, {
                                 switch (qkv.dtype()) {
                                   case paddle::DataType::BFLOAT16: {
-                                    DecodeAppendC8Attention<paddle::bfloat16,
-                                                            GROUP_SIZE,
-                                                            HEAD_DIM,
-                                                            BLOCK_SIZE,
-                                                            CAUSAL,
-                                                            Q_TILE_SIZE,
-                                                            IsFP8,
-                                                            IsDynamicC8>(
+                                    DecodeUnifiedC8Attention<paddle::bfloat16,
+                                                             GROUP_SIZE,
+                                                             HEAD_DIM,
+                                                             BLOCK_SIZE,
+                                                             CAUSAL,
+                                                             Q_TILE_SIZE,
+                                                             IsFP8,
+                                                             IsDynamicC8>(
                                         meta_data,
                                         qkv,
                                         key_cache,
@@ -257,14 +257,14 @@ std::vector<paddle::Tensor> DecodeAppendAttention(
                                     break;
                                   }
                                   case paddle::DataType::FLOAT16: {
-                                    DecodeAppendC8Attention<paddle::float16,
-                                                            GROUP_SIZE,
-                                                            HEAD_DIM,
-                                                            BLOCK_SIZE,
-                                                            CAUSAL,
-                                                            Q_TILE_SIZE,
-                                                            IsFP8,
-                                                            IsDynamicC8>(
+                                    DecodeUnifiedC8Attention<paddle::float16,
+                                                             GROUP_SIZE,
+                                                             HEAD_DIM,
+                                                             BLOCK_SIZE,
+                                                             CAUSAL,
+                                                             Q_TILE_SIZE,
+                                                             IsFP8,
+                                                             IsDynamicC8>(
                                         meta_data,
                                         qkv,
                                         key_cache,
@@ -275,7 +275,7 @@ std::vector<paddle::Tensor> DecodeAppendAttention(
                                         attn_mask,
                                         cache_quant_type == "block_wise_fp8"
                                             ? cache_k_quant_scales.get()
-                                            : cache_v_dequant_scales.get(),
+                                            : cache_k_dequant_scales.get(),
                                         cache_quant_type == "block_wise_fp8"
                                             ? cache_v_quant_scales.get()
                                             : cache_v_dequant_scales.get(),
@@ -311,7 +311,7 @@ std::vector<paddle::Tensor> DecodeAppendAttention(
   return {fmha_out};
 }
 
-std::vector<std::vector<int64_t>> DecodeAppendAttentionInferShape(
+std::vector<std::vector<int64_t>> DecodeUnifiedAttentionInferShape(
     const std::vector<int64_t>& qkv_shape,
     const std::vector<int64_t>& key_cache_shape,
     const std::vector<int64_t>& value_cache_shape,
@@ -348,7 +348,7 @@ std::vector<std::vector<int64_t>> DecodeAppendAttentionInferShape(
   return {fmha_out_shape};
 }
 
-std::vector<paddle::DataType> DecodeAppendAttentionInferDtype(
+std::vector<paddle::DataType> DecodeUnifiedAttentionInferDtype(
     const paddle::DataType& qkv_dtype,
     const paddle::DataType& key_cache_dtype,
     const paddle::DataType& value_cache_dtype,
@@ -385,7 +385,7 @@ std::vector<paddle::DataType> DecodeAppendAttentionInferDtype(
   return {fmha_out_dtype};
 }
 
-PD_BUILD_STATIC_OP(decode_append_attention)
+PD_BUILD_STATIC_OP(decode_unified_attention)
     .Inputs({"qkv",
              "key_cache",
              "value_cache",
@@ -423,6 +423,6 @@ PD_BUILD_STATIC_OP(decode_append_attention)
         "causal: bool",
         "sliding_window: int",
     })
-    .SetKernelFn(PD_KERNEL(DecodeAppendAttention))
-    .SetInferShapeFn(PD_INFER_SHAPE(DecodeAppendAttentionInferShape))
-    .SetInferDtypeFn(PD_INFER_DTYPE(DecodeAppendAttentionInferDtype));
+    .SetKernelFn(PD_KERNEL(DecodeUnifiedAttention))
+    .SetInferShapeFn(PD_INFER_SHAPE(DecodeUnifiedAttentionInferShape))
+    .SetInferDtypeFn(PD_INFER_DTYPE(DecodeUnifiedAttentionInferDtype));

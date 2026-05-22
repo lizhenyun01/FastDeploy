@@ -220,7 +220,7 @@ std::vector<paddle::Tensor> DecoderWriteCacheWithRoPE(
     const float quant_min_bound,
     const bool speculate_decoder);
 
-std::vector<paddle::Tensor> DecodeAppendAttention(
+std::vector<paddle::Tensor> DecodeUnifiedAttention(
     const paddle::Tensor& qkv,
     const paddle::Tensor& key_cache,
     const paddle::Tensor& value_cache,
@@ -2030,11 +2030,11 @@ PYBIND11_MODULE(fastdeploy_ops, m) {
         "decoder write cache with RoPE function");
 
   /**
-   * decode_append_attention.cu
-   * decode_append_attention
+   * decode_unified_attention.cu
+   * decode_unified_attention
    */
-  m.def("decode_append_attention",
-        &DecodeAppendAttention,
+  m.def("decode_unified_attention",
+        &DecodeUnifiedAttention,
         "decoder append attention function");
 
   /**

@@ -268,7 +268,9 @@ __forceinline__ HOSTDEVICE void vec_cast<nv_bfloat16, float>(nv_bfloat16* dst,
 
 /*-------------------------------------4.
  * func-----------------------------------------*/
-__forceinline__ HOSTDEVICE int div_up(int a, int b) { return (a + b - 1) / b; }
+__forceinline__ HOSTDEVICE int div_up(int a, int b) {
+  return a / b + (a % b != 0);
+}
 
 template <typename T>
 __inline__ __device__ T Rsqrt(T x);
@@ -606,11 +608,8 @@ struct StoreFunc<T, VEC_SIZE, T> {
 
 #define DISPATCH_Q_TILE_SIZE(                           \
     group_size, max_tokens_per_batch, Q_TILE_SIZE, ...) \
-  if (group_size * max_tokens_per_batch <= 16) {        \
+  {                                                     \
     constexpr size_t Q_TILE_SIZE = 16;                  \
-    __VA_ARGS__                                         \
-  } else {                                              \
-    constexpr size_t Q_TILE_SIZE = 32;                  \
     __VA_ARGS__                                         \
   }
 

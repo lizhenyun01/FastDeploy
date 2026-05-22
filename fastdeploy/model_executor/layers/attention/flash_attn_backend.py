@@ -44,7 +44,7 @@ from fastdeploy.model_executor.layers.attention.base_attention_backend import (
 from fastdeploy.model_executor.layers.attention.ops import (
     append_attention,
     config_for_attention,
-    decode_append_attention,
+    decode_unified_attention,
     decoder_write_cache_with_rope,
     get_attn_mask_q,
     get_block_shape_and_split_kv_block,
@@ -419,7 +419,7 @@ class FlashAttentionBackend(AttentionBackend):
                     )
                 else:
                     forward_meta.attn_mask_q = None
-            if envs.USE_DECODE_ATTENTION:
+            if envs.USE_DECODE_UNIFIED_ATTENTION:
                 config_for_attention(
                     forward_meta.seq_lens_encoder,
                     forward_meta.seq_lens_decoder,
@@ -487,7 +487,7 @@ class FlashAttentionBackend(AttentionBackend):
                 head_dim=self.head_dim,
             )[0].reshape([-1, self.attn_outputsize_tp])
 
-        if envs.USE_DECODE_ATTENTION:
+        if envs.USE_DECODE_UNIFIED_ATTENTION:
             qkv_out = decoder_write_cache_with_rope(
                 qkv,
                 cache_k,
@@ -526,7 +526,7 @@ class FlashAttentionBackend(AttentionBackend):
                     [qkv.shape[0], self.num_heads * self.head_dim],
                     dtype=qkv.dtype,
                 )
-            decode_append_attention(
+            decode_unified_attention(
                 qkv_out,
                 cache_k,
                 cache_v,
