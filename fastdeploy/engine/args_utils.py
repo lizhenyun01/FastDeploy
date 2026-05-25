@@ -188,6 +188,10 @@ class EngineArgs:
     """
     Configuration for speculative execution.
     """
+    benchmark_metrics_config: Optional[Dict[str, Any]] = None
+    """
+    Configuration for in-process benchmark metrics logger.
+    """
     dynamic_load_weight: bool = False
     """
     dynamic load weight
@@ -274,6 +278,11 @@ class EngineArgs:
     Flag to disable the custom all-reduce kernel.
     """
 
+    enable_flashinfer_allreduce_fusion: bool = False
+    """
+    Flag to enable all reduce fusion kernel in flashinfer.
+    """
+
     use_internode_ll_two_stage: bool = False
     """
     Flag to use the internode_ll_two_stage kernel.
@@ -330,6 +339,11 @@ class EngineArgs:
     chunked_moe_size: int = 256
     """
     Chunk size of moe input.
+    """
+
+    enable_moe_scores_elementwise_fuse: bool = False
+    """
+    Flag to enable fused elementwise in get_moe_scores. Default is False (disabled).
     """
 
     cache_transfer_protocol: str = "ipc,rdma"
@@ -838,6 +852,16 @@ class EngineArgs:
             help="Configuration for speculative execution.",
         )
         model_group.add_argument(
+            "--benchmark-metrics-config",
+            type=json.loads,
+            default=EngineArgs.benchmark_metrics_config,
+            help="Configuration for in-process benchmark metrics logger. "
+            "Pass '{}' for defaults or a JSON with keys: "
+            "window_size (int, 0=all requests), "
+            "percentiles (str, e.g. '50,90,95,99'), "
+            "metrics (str, 'all' or comma-separated subset).",
+        )
+        model_group.add_argument(
             "--dynamic-load-weight",
             action="store_true",
             default=EngineArgs.dynamic_load_weight,
@@ -999,6 +1023,12 @@ class EngineArgs:
             action="store_true",
             default=EngineArgs.disable_custom_all_reduce,
             help="Flag to disable custom all-reduce.",
+        )
+        parallel_group.add_argument(
+            "--enable-flashinfer-allreduce-fusion",
+            action="store_true",
+            default=EngineArgs.enable_flashinfer_allreduce_fusion,
+            help="Flag to enable all reduce fusion kernel in flashinfer.",
         )
         parallel_group.add_argument(
             "--use-internode-ll-two-stage",
@@ -1379,7 +1409,12 @@ class EngineArgs:
             default=EngineArgs.enable_overlap_schedule,
             help="Enable overlapping schedule.",
         )
-
+        scheduler_group.add_argument(
+            "--enable-moe-scores-elementwise-fuse",
+            action="store_true",
+            default=EngineArgs.enable_moe_scores_elementwise_fuse,
+            help="Enable fused elementwise in get_moe_scores for MoE routing.",
+        )
         model_group.add_argument(
             "--deploy-modality",
             type=str,
@@ -1409,6 +1444,14 @@ class EngineArgs:
                 speculative_args[k] = v
 
         return SpeculativeConfig(speculative_args)
+
+    def create_benchmark_metrics_config(self):
+        """Create BenchmarkMetricsConfig if --benchmark-metrics-config is provided."""
+        if self.benchmark_metrics_config is None:
+            return None
+        from fastdeploy.config import BenchmarkMetricsConfig
+
+        return BenchmarkMetricsConfig(self.benchmark_metrics_config)
 
     def create_scheduler_config(self) -> SchedulerConfig:
         """
@@ -1489,6 +1532,7 @@ class EngineArgs:
             self.tensor_parallel_size = model_cfg.tensor_parallel_size
 
         speculative_cfg = self.create_speculative_config()
+        benchmark_metrics_cfg = self.create_benchmark_metrics_config()
         if not self.enable_chunked_prefill:
             if (current_platform.is_cuda() or current_platform.is_maca()) and self.splitwise_role == "mixed":
                 # default enable chunked prefill
@@ -1500,7 +1544,11 @@ class EngineArgs:
 
         if self.max_num_batched_tokens is None:
             if int(envs.ENABLE_V1_KVCACHE_SCHEDULER):
-                if current_platform.is_maca() or current_platform.is_iluvatar():
+                if (
+                    int(envs.FD_DISABLE_CHUNKED_PREFILL)
+                    or current_platform.is_maca()
+                    or current_platform.is_iluvatar()
+                ):
                     self.max_num_batched_tokens = self.max_model_len
                 else:
                     self.max_num_batched_tokens = 8192  # if set to max_model_len, it's easy to be OOM
@@ -1549,5 +1597,6 @@ class EngineArgs:
             plas_attention_config=plas_attention_config,
             early_stop_config=early_stop_cfg,
             routing_replay_config=routing_replay_config,
+            benchmark_metrics_config=benchmark_metrics_cfg,
             deploy_modality=DeployModality.from_str(self.deploy_modality),
         )

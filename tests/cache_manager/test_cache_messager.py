@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import importlib.util
+import os
 import sys
 import types
 
@@ -19,10 +21,24 @@ import numpy as np
 import paddle
 import pytest
 
-if not hasattr(paddle, "compat"):
-    paddle.compat = types.SimpleNamespace(enable_torch_proxy=lambda *args, **kwargs: None)
+if not hasattr(paddle, "enable_compat"):
+    paddle.enable_compat = lambda *args, **kwargs: None
 
-from fastdeploy.cache_manager import cache_messager
+# Import the legacy cache_messager module directly from the .py file,
+# because the cache_messager/ package shadows it and the legacy
+# fallback (cache_messager_legacy) does not exist locally.
+_cm_py_path = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+    "fastdeploy",
+    "cache_manager",
+    "cache_messager.py",
+)
+_spec = importlib.util.spec_from_file_location(
+    "fastdeploy.cache_manager.cache_messager_py",
+    _cm_py_path,
+)
+cache_messager = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(cache_messager)
 
 
 class _DummyBarrier:
@@ -40,12 +56,10 @@ class _DummyEngineWorkerQueue:
         self.cache_info_calls = 0
         self.connect_task_calls = 0
         self.cache_info_barrier = _DummyBarrier()
-        self.finish_add_cache_task_barrier = _DummyBarrier()
         self.finish_send_cache_barrier = _DummyBarrier()
         self.connect_task_barrier = _DummyBarrier()
         self.connect_task_response_barrier = _DummyBarrier()
         self.begin_send_cache_barrier = _DummyBarrier()
-        self.finished_add_cache_task_req_ids = []
         self.finished_req_payloads = []
         self.connect_task_responses = []
 
@@ -55,9 +69,6 @@ class _DummyEngineWorkerQueue:
         info = self.cache_info_sequence[self.cache_info_calls]
         self.cache_info_calls += 1
         return info
-
-    def put_finished_add_cache_task_req(self, req_ids):
-        self.finished_add_cache_task_req_ids.append(req_ids)
 
     def put_finished_req(self, payload):
         self.finished_req_payloads.append(payload)
@@ -111,6 +122,14 @@ class _DummyLogger:
 
     def error(self, msg):
         self.messages.append(("error", msg))
+
+
+class _QueueRecorder:
+    def __init__(self):
+        self.items = []
+
+    def put(self, item):
+        self.items.append(item)
 
 
 class _DummySignalValue:
@@ -376,8 +395,112 @@ def test_cache_messager_v1_add_cache_task_thread(monkeypatch):
     }
     with pytest.raises(SystemExit):
         messager._add_cache_task_thread()
-    assert dummy_queue.finished_add_cache_task_req_ids == [["req-2"]]
     assert messager.cache_info["req-2"]["status"] == "init"
+
+
+def test_cache_messager_v1_recovers_pending_layer0_signal(monkeypatch):
+    dummy_queue = _DummyEngineWorkerQueue(
+        cache_info_sequence=[
+            [
+                {
+                    "request_id": "req-pending",
+                    "src_block_ids": [0, 1],
+                    "dest_block_ids": [2],
+                    "current_id": 3,
+                    "need_prefill_tokens": 128,
+                    "transfer_protocol": "rdma",
+                }
+            ]
+        ]
+    )
+    monkeypatch.setattr(cache_messager, "EngineWorkerQueue", lambda *args, **kwargs: dummy_queue)
+    monkeypatch.setattr(cache_messager, "RDMACommManager", _DummyRDMACommManager)
+    monkeypatch.setattr(cache_messager, "logger", _DummyLogger(), raising=False)
+
+    gpu_cache_kvs = _build_cache_kvs(dtype="float16", include_value_cache=True, num_layers=1)
+    messager = cache_messager.CacheMessagerV1(
+        splitwise_role="mixed",
+        transfer_protocol="rdma",
+        pod_ip="0.0.0.0",
+        engine_worker_queue_port=9000,
+        local_data_parallel_id=0,
+        gpu_cache_kvs=gpu_cache_kvs,
+        rank=0,
+        nranks=1,
+        num_layers=1,
+        gpu_id=0,
+        block_size=64,
+        rdma_port="2222",
+    )
+    messager.cache_prefilled_engine_ids_queue = _QueueRecorder()
+    messager.cache_info["req-pending"] = {
+        "request_id": "req-pending",
+        "src_block_ids": [0, 1],
+        "dest_block_ids": [2],
+        "current_id": 3,
+        "need_prefill_tokens": 128,
+        "transfer_protocol": "rdma",
+    }
+    messager.pending_layer0_signals[3] = (3, 64)
+    messager.pending_layer0_signals[4] = (4, 64)
+
+    with pytest.raises(SystemExit):
+        messager._add_cache_task_thread()
+
+    assert messager.pending_layer0_signals == {4: (4, 64)}
+    assert messager.cache_prefilled_engine_ids_queue.items == [[(3, 64)]]
+
+
+def test_cache_messager_v1_drops_invalid_pending_layer0_signal(monkeypatch):
+    dummy_queue = _DummyEngineWorkerQueue(
+        cache_info_sequence=[
+            [
+                {
+                    "request_id": "req-pending",
+                    "src_block_ids": [0, 1],
+                    "dest_block_ids": [2],
+                    "current_id": 3,
+                    "need_prefill_tokens": 128,
+                    "transfer_protocol": "rdma",
+                }
+            ]
+        ]
+    )
+    monkeypatch.setattr(cache_messager, "EngineWorkerQueue", lambda *args, **kwargs: dummy_queue)
+    monkeypatch.setattr(cache_messager, "RDMACommManager", _DummyRDMACommManager)
+    monkeypatch.setattr(cache_messager, "logger", _DummyLogger(), raising=False)
+
+    gpu_cache_kvs = _build_cache_kvs(dtype="float16", include_value_cache=True, num_layers=1)
+    messager = cache_messager.CacheMessagerV1(
+        splitwise_role="mixed",
+        transfer_protocol="rdma",
+        pod_ip="0.0.0.0",
+        engine_worker_queue_port=9000,
+        local_data_parallel_id=0,
+        gpu_cache_kvs=gpu_cache_kvs,
+        rank=0,
+        nranks=1,
+        num_layers=1,
+        gpu_id=0,
+        block_size=64,
+        rdma_port="2222",
+    )
+    messager.cache_prefilled_engine_ids_queue = _QueueRecorder()
+    messager.cache_info["req-pending"] = {
+        "request_id": "req-pending",
+        "src_block_ids": [0, 1],
+        "dest_block_ids": [2],
+        "current_id": 3,
+        "need_prefill_tokens": 128,
+        "transfer_protocol": "rdma",
+    }
+    messager.pending_layer0_signals[3] = (3, 256)
+
+    with pytest.raises(SystemExit):
+        messager._add_cache_task_thread()
+
+    assert messager.pending_layer0_signals == {}
+    assert messager.cache_prefilled_engine_ids_queue.items == []
 
 
 def test_cache_messager_v1_prefill_layerwise_send_cache_thread(monkeypatch):
@@ -425,10 +548,12 @@ def test_cache_messager_v1_prefill_layerwise_send_cache_thread(monkeypatch):
     }
     messager.engine_cache_tasks[0] = {"prefilled_layer_idx": 1, "prefilled_token_num": 64}
     messager.cache_info["req-3"] = messager.idx_cache_task_dict[0]
+    messager.pending_layer0_signals = {0: (0, 64), 1: (1, 64)}
     with pytest.raises(SystemExit):
         messager.prefill_layerwise_send_cache_thread()
     assert dummy_queue.finished_req_payloads
     assert dummy_queue.finished_req_payloads[0][0][0] == "req-3"
+    assert messager.pending_layer0_signals == {1: (1, 64)}
 
 
 def test_cache_messager_v1_handle_connect_task(monkeypatch):
@@ -552,13 +677,6 @@ def test_cache_messager_v1_consume_signals(monkeypatch):
     monkeypatch.setattr(cache_messager, "RDMACommManager", _DummyRDMACommManager)
     monkeypatch.setattr(cache_messager, "logger", _DummyLogger(), raising=False)
 
-    class _QueueRecorder:
-        def __init__(self):
-            self.items = []
-
-        def put(self, item):
-            self.items.append(item)
-
     counter = {"calls": 0}
 
     def _fake_get_output_kv_signal(kv_signal_data, rank_id, wait_flag):
@@ -590,10 +708,55 @@ def test_cache_messager_v1_consume_signals(monkeypatch):
         rdma_port="2222",
     )
     messager.cache_info["req-4"] = {"request_id": "req-4"}
+    messager.idx_cache_task_dict[2] = {"request_id": "req-4", "current_id": 2}
     messager.cache_prefilled_engine_ids_queue = _QueueRecorder()
     with pytest.raises(SystemExit):
         messager.consume_signals()
     assert messager.cache_prefilled_engine_ids_queue.items == [[(2, 9)]]
+
+
+def test_cache_messager_v1_consume_signals_buffers_early_layer0(monkeypatch):
+    monkeypatch.setattr(cache_messager, "EngineWorkerQueue", _DummyEngineWorkerQueue)
+    monkeypatch.setattr(cache_messager, "RDMACommManager", _DummyRDMACommManager)
+    monkeypatch.setattr(cache_messager, "logger", _DummyLogger(), raising=False)
+
+    signals = [(5, 7, 9), (5, 17, 19)]
+
+    def _fake_get_output_kv_signal(kv_signal_data, rank_id, wait_flag):
+        if not signals:
+            raise SystemExit
+        engine_idx, chuck_token_offset, current_seq_len = signals.pop(0)
+        data = np.full(kv_signal_data.shape, -1, dtype="int32")
+        data[0] = 1
+        data[1] = 0
+        data[2] = engine_idx
+        data[3] = chuck_token_offset
+        data[4] = current_seq_len
+        kv_signal_data.set_value(data)
+
+    monkeypatch.setattr(cache_messager, "get_output_kv_signal", _fake_get_output_kv_signal)
+    gpu_cache_kvs = _build_cache_kvs(dtype="float16", include_value_cache=False, num_layers=1)
+    messager = cache_messager.CacheMessagerV1(
+        splitwise_role="mixed",
+        transfer_protocol="rdma",
+        pod_ip="0.0.0.0",
+        engine_worker_queue_port=9000,
+        local_data_parallel_id=0,
+        gpu_cache_kvs=gpu_cache_kvs,
+        rank=0,
+        nranks=1,
+        num_layers=1,
+        gpu_id=0,
+        block_size=64,
+        rdma_port="2222",
+    )
+    messager.cache_prefilled_engine_ids_queue = _QueueRecorder()
+
+    with pytest.raises(SystemExit):
+        messager.consume_signals()
+
+    assert messager.pending_layer0_signals == {5: (5, 36)}
+    assert messager.cache_prefilled_engine_ids_queue.items == []
 
 
 def test_main_initializes_cache_and_exits(monkeypatch):

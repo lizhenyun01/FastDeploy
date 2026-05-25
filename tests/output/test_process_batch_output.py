@@ -21,7 +21,7 @@ from unittest.mock import MagicMock, Mock, patch
 
 import paddle
 
-from fastdeploy.engine.request import RequestMetrics, RequestOutput
+from fastdeploy.engine.request import RequestMetrics, RequestOutput, RequestStatus
 from fastdeploy.output.token_processor import TokenProcessor
 
 paddle.set_device("cpu")
@@ -82,6 +82,7 @@ class MockTask:
         self.ic_req_data = {}
         self.prompt_token_ids_len = 0
         self.trace_carrier = {}
+        self.status = RequestStatus.RUNNING_DECODE
 
         now = time.time()
         self.metrics = RequestMetrics(
@@ -168,6 +169,7 @@ class TestTokenProcessorProcessBatchOutput(unittest.TestCase):
         processor.accept_token_num_per_head_per_request = {}
         processor.accept_token_num_per_head = [0] * MAX_DRAFT_TOKENS
         processor.use_sampling_mask = False
+        processor._benchmark_logger = None
 
         # processor._recycle_resources = Mock()
 

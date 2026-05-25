@@ -28,16 +28,10 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."
 
 import numpy as np
 import paddle
-from e2e.utils.serving_utils import clean_ports
+from e2e.utils.serving_utils import PORTS_TO_CLEAN, clean_ports
 
-if not hasattr(paddle, "compat"):
-
-    class _PaddleCompat:
-        @staticmethod
-        def enable_torch_proxy(scope=None):
-            return None
-
-    paddle.compat = _PaddleCompat()
+if not hasattr(paddle, "enable_compat"):
+    paddle.enable_compat = lambda scope=None: None
 
 from fastdeploy.cache_manager.cache_data import CacheStatus
 from fastdeploy.engine.args_utils import EngineArgs
@@ -518,6 +512,21 @@ class TestCommonEngineAdditionalCoverage(unittest.TestCase):
             engine_worker_queue_port = [engine_worker_queue_port + 21 + i for i in range(dp // nnode)]
             cache_queue_port = [cache_queue_port + 21 + i for i in range(dp // nnode)]
 
+        # Add ports to cleanup list
+        ports_to_add = []
+        if isinstance(engine_worker_queue_port, list):
+            ports_to_add.extend(engine_worker_queue_port)
+        else:
+            ports_to_add.append(engine_worker_queue_port)
+        if isinstance(cache_queue_port, list):
+            ports_to_add.extend(cache_queue_port)
+        else:
+            ports_to_add.append(cache_queue_port)
+
+        for port in ports_to_add:
+            if port not in PORTS_TO_CLEAN:
+                PORTS_TO_CLEAN.append(port)
+
         if kwargs.get("num_gpu_blocks_override") is not None and "kv_cache_ratio" not in kwargs:
             kwargs["kv_cache_ratio"] = 1
 
@@ -585,6 +594,7 @@ class TestCommonEngineAdditionalCoverage(unittest.TestCase):
         eng._process_splitwise_task = lambda: None
         eng._schedule_request_to_worker = lambda: None
         eng._schedule_request_to_worker_v1 = lambda: None
+        eng._prepare_request_v1 = lambda: None
 
         started_cache = {}
 
@@ -630,6 +640,7 @@ class TestCommonEngineAdditionalCoverage(unittest.TestCase):
         eng._process_splitwise_task = lambda: None
         eng._schedule_request_to_worker = lambda: None
         eng._schedule_request_to_worker_v1 = lambda: None
+        eng._prepare_request_v1 = lambda: None
 
         started_cache = {}
 
@@ -1143,22 +1154,29 @@ class TestCommonEngineAdditionalCoverage(unittest.TestCase):
         eng = self._make_mixed_engine()
         eng.is_paused = False
         eng._pause_cond = threading.Condition()
-        eng.engine_worker_queue = Mock(exist_tasks=Mock(return_value=False), put_tasks=Mock())
+        eng.engine_worker_queue = Mock(exist_tasks=Mock(return_value=False))
         eng.resource_manager = Mock(
-            preempted_all=Mock(return_value=[Request(request_id="r1", prompt_token_ids=[1], prompt_token_ids_len=1)]),
-            get_real_bsz=Mock(),
-            wait_worker_inflight_requests_finish=Mock(),
+            requests={"r1": Mock(output_token_ids=[1, 2, 3])},
+            waiting_abort_req_id_set=set(),
+            to_be_aborted_req_id_set=set(),
+            add_abort_req_ids=Mock(),
             log_status=Mock(),
             cache_manager=Mock(reset=Mock()),
-            real_bsz=1,
         )
         eng.token_processor = Mock(clear_data=Mock())
-        eng.scheduler = Mock(get_inflight_requests=Mock(return_value=[]), reset=Mock())
+        mock_scheduler = Mock(reset=Mock())
+        mock_scheduler.requests = {}
+        mock_scheduler.mutex = threading.Lock()
+        mock_scheduler.responses = {}
+        mock_scheduler.batch_responses_per_step = []
+        eng.scheduler = mock_scheduler
         eng._send_error_response = Mock()
+        eng._wait_inflight_drained = Mock()
 
         with patch("fastdeploy.engine.common_engine.envs.ENABLE_V1_KVCACHE_SCHEDULER", True):
             eng._control_pause(ControlRequest(request_id="ctrl1", method="pause"))
             self.assertTrue(eng.is_paused)
+            eng.resource_manager.add_abort_req_ids.assert_called_once()
 
             eng._control_resume(ControlRequest(request_id="ctrl2", method="resume"))
             self.assertFalse(eng.is_paused)
@@ -1385,21 +1403,18 @@ class TestCommonEngineAdditionalCoverage(unittest.TestCase):
         task = Request(request_id="v1_r0", prompt_token_ids=[1], prompt_token_ids_len=1)
         task.metrics.scheduler_recv_req_time = time.time()
 
-        eng.scheduler = Mock(get_requests=Mock(return_value=[task]), put_results=Mock())
+        eng.scheduler = Mock(put_results=Mock())
         eng.engine_worker_queue = Mock(exist_tasks=Mock(return_value=False), put_tasks=Mock())
 
-        eng.resource_manager = self._make_v1_decode_rm(eng, ([], []), with_add_request=True)
+        eng.resource_manager = self._make_v1_decode_rm(eng, ([task], []), with_add_request=True)
 
         try:
-            with (
-                patch("fastdeploy.engine.common_engine.ThreadPoolExecutor", self._make_dummy_executor(eng)),
-                patch("fastdeploy.engine.common_engine.time.sleep", lambda *_: None),
-            ):
+            with patch("fastdeploy.engine.common_engine.time.sleep", lambda *_: None):
                 eng._schedule_request_to_worker_v1()
         finally:
             eng.running = False
 
-        eng.resource_manager.add_request.assert_called_once_with(task)
+        eng.engine_worker_queue.put_tasks.assert_called_once()
         self._detach_finalizer(eng)
 
     def test_schedule_request_to_worker_v1_prefill_decode_alloc_error_safe(self):
@@ -1419,7 +1434,6 @@ class TestCommonEngineAdditionalCoverage(unittest.TestCase):
         eng.scheduler = Mock(get_requests=Mock(return_value=[task]), put_results=Mock())
         eng.engine_worker_queue = Mock(
             exist_tasks=Mock(return_value=False),
-            get_finished_add_cache_task_req=Mock(return_value=[]),
         )
 
         eng.resource_manager = self._make_v1_prefill_continuous_rm(eng, waiting_async_result=False)
@@ -1431,11 +1445,13 @@ class TestCommonEngineAdditionalCoverage(unittest.TestCase):
 
         try:
             with (
-                patch("fastdeploy.engine.common_engine.envs.PREFILL_CONTINUOUS_REQUEST_DECODE_RESOURCES", False),
-                patch("fastdeploy.engine.common_engine.ThreadPoolExecutor", self._make_dummy_executor(eng)),
-                patch("fastdeploy.engine.common_engine.time.sleep", lambda *_: None),
+                patch(
+                    "fastdeploy.engine.common_engine_prepare_mixin.envs.PREFILL_CONTINUOUS_REQUEST_DECODE_RESOURCES",
+                    False,
+                ),
+                patch("fastdeploy.engine.common_engine_prepare_mixin.time.sleep", lambda *_: None),
             ):
-                eng._schedule_request_to_worker_v1()
+                eng._fetch_request_prefill()
         finally:
             eng.running = False
 
@@ -1456,17 +1472,14 @@ class TestCommonEngineAdditionalCoverage(unittest.TestCase):
         task.task_type = RequestType.PREEMPTED
         task.metrics.scheduler_recv_req_time = time.time()
 
-        eng.scheduler = Mock(get_requests=Mock(return_value=[]), put_results=Mock())
+        eng.scheduler = Mock(put_results=Mock())
         eng.engine_worker_queue = Mock(exist_tasks=Mock(return_value=False), put_tasks=Mock())
         eng._send_error_response = Mock()
 
         eng.resource_manager = self._make_v1_decode_rm(eng, ([task], [("rid_x", None), ("rid_y", "bad")]))
 
         try:
-            with (
-                patch("fastdeploy.engine.common_engine.ThreadPoolExecutor", self._make_dummy_executor(eng)),
-                patch("fastdeploy.engine.common_engine.time.sleep", lambda *_: None),
-            ):
+            with patch("fastdeploy.engine.common_engine.time.sleep", lambda *_: None):
                 eng._schedule_request_to_worker_v1()
         finally:
             eng.running = False
@@ -1490,16 +1503,13 @@ class TestCommonEngineAdditionalCoverage(unittest.TestCase):
         task.trace_carrier = {}
         task.metrics.scheduler_recv_req_time = time.time()
 
-        eng.scheduler = Mock(get_requests=Mock(return_value=[]), put_results=Mock())
+        eng.scheduler = Mock(put_results=Mock())
         eng.engine_worker_queue = Mock(exist_tasks=Mock(return_value=False), put_tasks=Mock())
 
         eng.resource_manager = self._make_v1_decode_rm(eng, ([task], []))
 
         try:
-            with (
-                patch("fastdeploy.engine.common_engine.ThreadPoolExecutor", self._make_dummy_executor(eng)),
-                patch("fastdeploy.engine.common_engine.time.sleep", lambda *_: None),
-            ):
+            with patch("fastdeploy.engine.common_engine.time.sleep", lambda *_: None):
                 eng._schedule_request_to_worker_v1()
         finally:
             eng.running = False
@@ -1521,23 +1531,20 @@ class TestCommonEngineAdditionalCoverage(unittest.TestCase):
         task.trace_carrier = {}
         task.metrics.scheduler_recv_req_time = time.time()
 
-        eng.scheduler = Mock(get_requests=Mock(return_value=[]), put_results=Mock())
+        eng.scheduler = Mock(put_results=Mock())
         eng.engine_worker_queue = Mock(exist_tasks=Mock(return_value=False), put_tasks=Mock())
         eng._send_error_response = Mock()
 
         eng.resource_manager = self._make_v1_decode_rm(eng, ([task], [("rid_none", None)]))
 
-        with (
-            patch("fastdeploy.engine.common_engine.ThreadPoolExecutor", self._make_dummy_executor(eng)),
-            patch("fastdeploy.engine.common_engine.time.sleep", lambda *_: None),
-        ):
+        with patch("fastdeploy.engine.common_engine.time.sleep", lambda *_: None):
             eng._schedule_request_to_worker_v1()
 
         eng.engine_worker_queue.put_tasks.assert_called_once()
         eng._send_error_response.assert_not_called()
         self._detach_finalizer(eng)
 
-    def test_schedule_request_to_worker_v1_threadpool_shutdown_breaks(self):
+    def test_schedule_request_to_worker_v1_no_tasks_sleeps(self):
         eng = self._make_mixed_engine()
         self._setup_v1_engine(eng)
 
@@ -1545,17 +1552,7 @@ class TestCommonEngineAdditionalCoverage(unittest.TestCase):
 
         eng.resource_manager = self._make_v1_decode_rm(eng, ([], []))
 
-        class DummyExecutor:
-            def __init__(self, max_workers=None):
-                pass
-
-            def submit(self, fn):
-                raise RuntimeError("cannot schedule new futures after shutdown")
-
-        with (
-            patch("fastdeploy.engine.common_engine.ThreadPoolExecutor", DummyExecutor),
-            patch("fastdeploy.engine.common_engine.time.sleep", lambda *_: None),
-        ):
+        with patch("fastdeploy.engine.common_engine.time.sleep", lambda *_: None):
             eng._schedule_request_to_worker_v1()
 
         self._detach_finalizer(eng)
@@ -1578,17 +1575,8 @@ class TestCommonEngineAdditionalCoverage(unittest.TestCase):
 
         eng.resource_manager = self._make_v1_prefill_continuous_rm(eng, waiting_async_result=False)
 
-        calls = {"n": 0}
-
-        def get_finished_add_cache_task_req():
-            if calls["n"] == 0:
-                calls["n"] += 1
-                return ["pc_ok"]
-            return []
-
         eng.engine_worker_queue = Mock(
             exist_tasks=Mock(return_value=False),
-            get_finished_add_cache_task_req=Mock(side_effect=get_finished_add_cache_task_req),
         )
 
         eng.split_connector = Mock(
@@ -1598,11 +1586,12 @@ class TestCommonEngineAdditionalCoverage(unittest.TestCase):
         )
 
         with (
-            patch("fastdeploy.engine.common_engine.envs.PREFILL_CONTINUOUS_REQUEST_DECODE_RESOURCES", True),
-            patch("fastdeploy.engine.common_engine.ThreadPoolExecutor", self._make_dummy_executor(eng)),
-            patch("fastdeploy.engine.common_engine.time.sleep", lambda *_: None),
+            patch(
+                "fastdeploy.engine.common_engine_prepare_mixin.envs.PREFILL_CONTINUOUS_REQUEST_DECODE_RESOURCES", True
+            ),
+            patch("fastdeploy.engine.common_engine_prepare_mixin.time.sleep", lambda *_: None),
         ):
-            eng._schedule_request_to_worker_v1()
+            eng._fetch_request_prefill()
 
         eng.split_connector.send_splitwise_tasks.assert_called()
         eng.split_connector.send_cache_info_to_messager.assert_called_once()
@@ -1630,17 +1619,8 @@ class TestCommonEngineAdditionalCoverage(unittest.TestCase):
 
         eng.resource_manager = self._make_v1_prefill_continuous_rm(eng, waiting_async_result=None)
 
-        calls = {"n": 0}
-
-        def get_finished_add_cache_task_req():
-            if calls["n"] == 0:
-                calls["n"] += 1
-                return ["pc_fail"]
-            return []
-
         eng.engine_worker_queue = Mock(
             exist_tasks=Mock(return_value=False),
-            get_finished_add_cache_task_req=Mock(side_effect=get_finished_add_cache_task_req),
         )
 
         eng.split_connector = Mock(
@@ -1650,11 +1630,12 @@ class TestCommonEngineAdditionalCoverage(unittest.TestCase):
         )
 
         with (
-            patch("fastdeploy.engine.common_engine.envs.PREFILL_CONTINUOUS_REQUEST_DECODE_RESOURCES", True),
-            patch("fastdeploy.engine.common_engine.ThreadPoolExecutor", self._make_dummy_executor(eng)),
-            patch("fastdeploy.engine.common_engine.time.sleep", lambda *_: None),
+            patch(
+                "fastdeploy.engine.common_engine_prepare_mixin.envs.PREFILL_CONTINUOUS_REQUEST_DECODE_RESOURCES", True
+            ),
+            patch("fastdeploy.engine.common_engine_prepare_mixin.time.sleep", lambda *_: None),
         ):
-            eng._schedule_request_to_worker_v1()
+            eng._fetch_request_prefill()
 
         eng.scheduler.put_results.assert_called_once()
         eng.resource_manager.pre_recycle_resource.assert_called_once_with("pc_fail")
@@ -3530,7 +3511,7 @@ class TestCommonEngineAdditionalCoverage(unittest.TestCase):
         self.assertGreaterEqual(call_count[0], 1)
         self._detach_finalizer(eng)
 
-    # ── _control_abort_requests / _wait_abort_complete ───────────────
+    # ── _resolve_abort_targets / _build_abort_results ───────────────
 
     def _make_abort_engine(self, splitwise_role="mixed"):
         """Create an engine wired up for abort tests."""
@@ -3571,179 +3552,21 @@ class TestCommonEngineAdditionalCoverage(unittest.TestCase):
         req.metrics.engine_recv_first_token_time = 1000.2
         return req
 
-    def test_control_abort_requests_not_v1_raises(self):
-        """abort_requests raises when ENABLE_V1_KVCACHE_SCHEDULER is off."""
-        eng = self._make_abort_engine()
-        control_req = ControlRequest("ctrl-1", "abort_requests", {"abort_all": True, "req_ids": []})
-        with patch("fastdeploy.engine.common_engine.envs.ENABLE_V1_KVCACHE_SCHEDULER", 0):
-            with self.assertRaises(Exception) as ctx:
-                eng._control_abort_requests(control_req)
-            self.assertIn("only supported", str(ctx.exception))
-        self._detach_finalizer(eng)
-
-    def test_control_abort_requests_abort_all(self):
-        """abort_all=True aborts all requests in resource_manager + scheduler."""
+    def test_resolve_abort_targets_abort_all(self):
+        """abort_all=True returns all requests in resource_manager + scheduler."""
         eng = self._make_abort_engine()
         eng.resource_manager.requests = {"req-1_0": self._make_fake_request([10, 20])}
         eng.scheduler.requests = {"req-2_0": MagicMock(raw=self._make_fake_request([30]))}
 
-        control_req = ControlRequest("ctrl-1", "abort_requests", {"abort_all": True, "req_ids": []})
-
-        def clear_abort_sets(req_id):
-            # Simulate immediate abort completion
-            eng.resource_manager.waiting_abort_req_id_set.discard(req_id)
-
-        eng.resource_manager.add_abort_req_ids = MagicMock(side_effect=clear_abort_sets)
-
-        with patch("fastdeploy.engine.common_engine.envs.ENABLE_V1_KVCACHE_SCHEDULER", 1):
-            result = eng._control_abort_requests(control_req)
-
-        self.assertEqual(len(result["aborted"]), 2)
-        self.assertEqual(result["not_found"], [])
-        ids = {a["request_id"] for a in result["aborted"]}
-        self.assertEqual(ids, {"req-1_0", "req-2_0"})
-        # put_results should have been called (not prefill)
-        eng.scheduler.put_results.assert_called_once()
+        target = eng._resolve_abort_targets(abort_all=True, req_ids=[])
+        self.assertEqual(set(target), {"req-1_0", "req-2_0"})
         self._detach_finalizer(eng)
 
-    def test_control_abort_requests_by_req_ids_with_suffix_match(self):
-        """req_ids match both exact and _0 suffix."""
+    def test_resolve_abort_targets_no_match(self):
+        """No matching request ids returns empty list."""
         eng = self._make_abort_engine()
-        eng.resource_manager.requests = {
-            "req-A_0": self._make_fake_request([1, 2, 3]),
-            "req-B": self._make_fake_request([4, 5]),
-        }
-
-        control_req = ControlRequest(
-            "ctrl-1",
-            "abort_requests",
-            {
-                "abort_all": False,
-                "req_ids": ["req-A", "req-B", "req-C"],
-            },
-        )
-
-        def clear_abort_sets(req_id):
-            eng.resource_manager.waiting_abort_req_id_set.discard(req_id)
-
-        eng.resource_manager.add_abort_req_ids = MagicMock(side_effect=clear_abort_sets)
-
-        with patch("fastdeploy.engine.common_engine.envs.ENABLE_V1_KVCACHE_SCHEDULER", 1):
-            result = eng._control_abort_requests(control_req)
-
-        aborted_ids = {a["request_id"] for a in result["aborted"]}
-        self.assertIn("req-A_0", aborted_ids)  # matched via _0 suffix
-        self.assertIn("req-B", aborted_ids)  # exact match
-        self.assertEqual(result["not_found"], ["req-C"])
-        self._detach_finalizer(eng)
-
-    def test_control_abort_requests_no_match(self):
-        """No requests found returns empty aborted and all in not_found."""
-        eng = self._make_abort_engine()
-        control_req = ControlRequest(
-            "ctrl-1",
-            "abort_requests",
-            {
-                "abort_all": False,
-                "req_ids": ["nonexistent"],
-            },
-        )
-
-        with patch("fastdeploy.engine.common_engine.envs.ENABLE_V1_KVCACHE_SCHEDULER", 1):
-            result = eng._control_abort_requests(control_req)
-
-        self.assertEqual(result["aborted"], [])
-        self.assertEqual(result["not_found"], ["nonexistent"])
-        self._detach_finalizer(eng)
-
-    def test_control_abort_requests_prefill_skips_wait_and_put(self):
-        """Prefill role skips _wait_abort_complete and put_results."""
-        eng = self._make_abort_engine(splitwise_role="prefill")
-        eng.resource_manager.requests = {"req-1_0": self._make_fake_request()}
-
-        control_req = ControlRequest("ctrl-1", "abort_requests", {"abort_all": True, "req_ids": []})
-        eng.resource_manager.add_abort_req_ids = MagicMock()
-
-        with patch("fastdeploy.engine.common_engine.envs.ENABLE_V1_KVCACHE_SCHEDULER", 1):
-            result = eng._control_abort_requests(control_req)
-
-        self.assertEqual(len(result["aborted"]), 1)
-        eng.scheduler.put_results.assert_not_called()
-        self._detach_finalizer(eng)
-
-    def test_control_abort_requests_output_token_count(self):
-        """output_token_count reflects partial_token_ids length."""
-        eng = self._make_abort_engine()
-        eng.resource_manager.requests = {"req-1_0": self._make_fake_request([10, 20, 30, 40, 50])}
-
-        control_req = ControlRequest("ctrl-1", "abort_requests", {"abort_all": True, "req_ids": []})
-
-        def clear_abort_sets(req_id):
-            eng.resource_manager.waiting_abort_req_id_set.discard(req_id)
-
-        eng.resource_manager.add_abort_req_ids = MagicMock(side_effect=clear_abort_sets)
-
-        with patch("fastdeploy.engine.common_engine.envs.ENABLE_V1_KVCACHE_SCHEDULER", 1):
-            result = eng._control_abort_requests(control_req)
-
-        self.assertEqual(result["aborted"][0]["output_token_count"], 5)
-        self._detach_finalizer(eng)
-
-    def test_wait_abort_complete_immediate(self):
-        """_wait_abort_complete returns immediately when all requests already cleaned."""
-        eng = self._make_abort_engine()
-        # Empty abort sets → remaining is empty → returns immediately
-        eng._wait_abort_complete(["req-1_0"])
-        self._detach_finalizer(eng)
-
-    def test_wait_abort_complete_progress(self):
-        """_wait_abort_complete exits when background thread cleans up."""
-        eng = self._make_abort_engine()
-        eng.resource_manager.waiting_abort_req_id_set = {"req-1_0"}
-        # Add the request to requests dict so it won't be filtered out
-        eng.resource_manager.requests = {"req-1_0": self._make_fake_request()}
-
-        call_count = [0]
-
-        def fake_sleep(s):
-            call_count[0] += 1
-            # Simulate background thread cleaning up after first sleep
-            eng.resource_manager.waiting_abort_req_id_set.discard("req-1_0")
-
-        with patch("fastdeploy.engine.common_engine.time.sleep", fake_sleep):
-            eng._wait_abort_complete(["req-1_0"])
-
-        self.assertGreaterEqual(call_count[0], 1)
-        self._detach_finalizer(eng)
-
-    def test_wait_abort_complete_force_cleanup_stuck_in_to_be_aborted(self):
-        """Stall timeout triggers force cleanup for requests in to_be_aborted_req_id_set."""
-        eng = self._make_abort_engine()
-        eng.resource_manager.to_be_aborted_req_id_set = {"req-1_0"}
-        # Add the request to requests dict so it won't be filtered out
-        eng.resource_manager.requests = {"req-1_0": self._make_fake_request()}
-
-        def mock_recycle(req_id):
-            eng.resource_manager.to_be_aborted_req_id_set.discard(req_id)
-
-        eng.resource_manager.recycle_abort_task = MagicMock(side_effect=mock_recycle)
-
-        # Make time.time() advance past stall_timeout
-        time_values = [100.0, 100.0, 102.0, 102.0, 102.0]
-        time_idx = [0]
-
-        def fake_time():
-            idx = min(time_idx[0], len(time_values) - 1)
-            time_idx[0] += 1
-            return time_values[idx]
-
-        with (
-            patch("fastdeploy.engine.common_engine.time.time", fake_time),
-            patch("fastdeploy.engine.common_engine.time.sleep", lambda s: None),
-        ):
-            eng._wait_abort_complete(["req-1_0"], stall_timeout=1)
-
-        eng.resource_manager.recycle_abort_task.assert_called_with("req-1_0")
+        target = eng._resolve_abort_targets(abort_all=False, req_ids=["nonexistent"])
+        self.assertEqual(target, [])
         self._detach_finalizer(eng)
 
 

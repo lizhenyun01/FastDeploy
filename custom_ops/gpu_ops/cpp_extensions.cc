@@ -618,10 +618,10 @@ std::vector<paddle::Tensor> count_tokens_per_expert_func(
     const paddle::Tensor& topk_ids,
     int64_t num_experts,
     bool compute_padded_cumsum = false);
-void GetPositionIdsAndMaskEncoderBatch(const paddle::Tensor& seq_lens_encoder,
-                                       const paddle::Tensor& seq_lens_decoder,
-                                       const paddle::Tensor& seq_lens_this_time,
-                                       const paddle::Tensor& position_ids);
+void GetPositionIds(const paddle::Tensor& seq_lens_encoder,
+                    const paddle::Tensor& seq_lens_decoder,
+                    const paddle::Tensor& seq_lens_this_time,
+                    const paddle::Tensor& position_ids);
 
 std::vector<paddle::Tensor> DecodeMLAWriteCacheKernel(
     const paddle::Tensor& kv_nope,
@@ -768,6 +768,19 @@ std::vector<paddle::Tensor> NoauxTc(paddle::Tensor& scores,
                                     int topk,
                                     bool renormalize,
                                     float routed_scaling_factor);
+
+std::vector<paddle::Tensor> grouped_topk(
+    paddle::Tensor& gating_output,
+    paddle::Tensor& e_score_correction_bias,
+    int n_group,
+    int topk_group,
+    int topk,
+    bool renormalize,
+    float routed_scaling_factor);
+
+std::vector<paddle::Tensor> FusedCastSigmoidBias(const paddle::Tensor& input,
+                                                 const paddle::Tensor& bias,
+                                                 std::string cast_type);
 
 std::vector<paddle::Tensor> NoauxTcRedundant(
     paddle::Tensor& scores,
@@ -1717,9 +1730,7 @@ PYBIND11_MODULE(fastdeploy_ops, m) {
         py::arg("is_zp_float"));
 #endif
 
-  m.def("get_position_ids_and_mask_encoder_batch",
-        &GetPositionIdsAndMaskEncoderBatch,
-        "get_position_ids_and_mask_encoder_batch function");
+  m.def("get_position_ids", &GetPositionIds, "get_position_ids function");
 
   /**
    * cutlass_scaled_mm.cu
@@ -1779,6 +1790,15 @@ PYBIND11_MODULE(fastdeploy_ops, m) {
 #endif
 
   m.def("noaux_tc", &NoauxTc, "noaux_tc for Deepseekv3 MoE compute");
+
+  m.def("grouped_topk", &grouped_topk, "fused grouped topk for MoE routing");
+
+  m.def("fused_cast_sigmoid_bias",
+        &FusedCastSigmoidBias,
+        "Fused cast+sigmoid+bias for MoE gating scores",
+        py::arg("input"),
+        py::arg("bias"),
+        py::arg("cast_type") = std::string("float32"));
 
   m.def("noaux_tc_redundant",
         &NoauxTcRedundant,

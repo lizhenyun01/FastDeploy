@@ -125,36 +125,33 @@ from fastdeploy.worker.output import LogprobsTensors, ModelOutputData, SamplerOu
 
 DISABLE_RECOVER = envs.FD_DISABLED_RECOVER == "1"
 
-if current_platform.is_cuda():
 
-    def async_set_value(tgt, src):
-        if isinstance(src, (int, float, bool)):
-            src = paddle.full(tgt.shape, fill_value=src, dtype=tgt.dtype)
-        elif isinstance(src, (list, np.array)):
-            dtype_str = str(tgt.dtype).split(".")[1]
-            if isinstance(src, list):
-                src = np.array(src, dtype=dtype_str if dtype_str != "bfloat16" else "float32")
+def async_set_value(tgt, src):
+    if isinstance(src, (int, float, bool)):
+        src = paddle.full(tgt.shape, fill_value=src, dtype=tgt.dtype)
+    elif isinstance(src, (list, np.ndarray)):
+        dtype_str = str(tgt.dtype).split(".")[1]
+        if isinstance(src, list):
+            src = np.array(src, dtype=dtype_str if dtype_str != "bfloat16" else "float32")
+        if current_platform.is_cuda():
             if str(src.dtype) != dtype_str:
                 srt_tensor = paddle.empty(tgt.shape, dtype=str(src.dtype))
                 src = custom_numpy_to_tensor(src, srt_tensor)
             else:
                 return custom_numpy_to_tensor(src, tgt)
-        elif isinstance(src, paddle.Tensor):
-            pass
         else:
-            raise ValueError("async_set_value unsupported src type: {}".format(type(src)))
-        if src.shape != tgt.shape:
-            src = src.reshape(tgt.shape)
-        if src.dtype != tgt.dtype:
-            src = src.cast(tgt.dtype)
-        if src.place != tgt.place:
-            src = src.to(tgt.place)
-        tgt.copy_(src, blocking=False)
-
-else:
-
-    def async_set_value(*args, **kwargs):
-        raise RuntimeError("async_set_value is only available on CUDA")
+            src = paddle.to_tensor(src, dtype=tgt.dtype)
+    elif isinstance(src, paddle.Tensor):
+        pass
+    else:
+        raise ValueError("async_set_value unsupported src type: {}".format(type(src)))
+    if src.shape != tgt.shape:
+        src = src.reshape(tgt.shape)
+    if src.dtype != tgt.dtype:
+        src = src.cast(tgt.dtype)
+    if src.place != tgt.place:
+        src = src.to(tgt.place)
+    tgt.copy_(src, blocking=False)
 
 
 def pre_process(
@@ -339,18 +336,10 @@ def post_process_normal(
 
     # Routing replay
     if routing_replay_manager is not None:
-        # Trigger lazy SharedMemory attach if not yet attempted
-        routing_replay_manager._try_attach_routing_host_view()
-        # GPU transient buffer → SharedMemory routing_host_buffer
-        slot_mapping_flat = routing_replay_manager.compute_slot_mapping_flat(
-            positions=routing_replay_manager.pending_update_positions
-        )
-        num_tokens = len(slot_mapping_flat)
+        slot_mapping_gpu = share_inputs["slot_mapping_buffer"]
+        num_tokens = int(share_inputs["ids_remove_padding"].shape[0])
         if routing_replay_manager.tp_rank == 0:
-            routing_replay_manager.save_captured_routing(
-                num_tokens=num_tokens,
-                slot_mapping=slot_mapping_flat,
-            )
+            routing_replay_manager.prepare_pending_save(num_tokens, slot_mapping_gpu)
 
     # 2. Update the input buffer of the model
     with paddle.framework._no_check_dy2st_diff():
@@ -394,17 +383,12 @@ def save_output_normal(
     save_each_rank: bool = False,
     sampling_mask_async_queue: Optional[queue.Queue] = None,
 ):
-    # Resolve deferred async D2H: sync event once at the top so all paths below
-    # can safely read sampling_mask and logz_per_batch.
-    if sampler_output.sampling_mask_event is not None:
-        sampler_output.sampling_mask_event.synchronize()
-        # Extract sparse indices from pinned CPU buffers
-        if sampler_output.sampling_mask is not None:
-            indices_window_cpu, mask_window_cpu, mask_bsz = sampler_output.sampling_mask
-            sampler_output.sampling_mask = _extract_sparse_indices(
-                indices_window_cpu.numpy(), mask_window_cpu.numpy(), mask_bsz
-            )
-        sampler_output.sampling_mask_event = None
+    # Extract sparse indices from pinned CPU buffers
+    if sampler_output.sampling_mask is not None:
+        indices_window_cpu, mask_window_cpu, mask_bsz = sampler_output.sampling_mask
+        sampler_output.sampling_mask = _extract_sparse_indices(
+            indices_window_cpu.numpy(), mask_window_cpu.numpy(), mask_bsz
+        )
 
     # Renormalize logprobs with logz (deferred from post_process for better overlap).
     if sampler_output.logprobs_tensors is not None and sampler_output.logz_per_batch is not None:
@@ -521,18 +505,10 @@ def post_process_speculate(
 
     # Routing replay
     if routing_replay_manager is not None:
-        # Trigger lazy SharedMemory attach if not yet attempted
-        routing_replay_manager._try_attach_routing_host_view()
-        # GPU transient buffer → SharedMemory routing_host_buffer
-        slot_mapping_flat = routing_replay_manager.compute_slot_mapping_flat(
-            positions=routing_replay_manager.pending_update_positions
-        )
-        num_tokens = len(slot_mapping_flat)
+        slot_mapping_gpu = share_inputs["slot_mapping_buffer"]
+        num_tokens = int(share_inputs["ids_remove_padding"].shape[0])
         if routing_replay_manager.tp_rank == 0:
-            routing_replay_manager.save_captured_routing(
-                num_tokens=num_tokens,
-                slot_mapping=slot_mapping_flat,
-            )
+            routing_replay_manager.prepare_pending_save(num_tokens, slot_mapping_gpu)
 
     # Unified state update: merges speculate_update + speculate_set_value_by_flags_and_idx
     # into a single kernel launch. Handles EOS detection, max_dec_len truncation, step_idx
@@ -574,24 +550,20 @@ def save_output_speculate(
 ):
     # Resolve deferred async D2H: sync event once at the top so all paths below
     # can safely read sampling_mask and logz_per_batch.
-    if sampler_output.sampling_mask_event is not None:
-        sampler_output.sampling_mask_event.synchronize()
-        if sampler_output.sampling_mask is not None:
-            indices_window_cpu, mask_window_cpu, mask_bsz = sampler_output.sampling_mask
-            sampler_output.sampling_mask = _extract_sparse_indices(
-                indices_window_cpu.numpy(), mask_window_cpu.numpy(), mask_bsz
-            )
-        sampler_output.sampling_mask_event = None
+    mask_bsz = None
+    if sampler_output.sampling_mask is not None:
+        indices_window_cpu, mask_window_cpu, mask_bsz = sampler_output.sampling_mask
+        sampler_output.sampling_mask = _extract_sparse_indices(
+            indices_window_cpu.numpy(), mask_window_cpu.numpy(), mask_bsz
+        )
 
     # Renormalize logprobs with logz (deferred from post_process for better overlap).
     if sampler_output.logprobs_tensors is not None and sampler_output.logz_per_batch is not None:
-        # TODO (wangyanpeng): Currently, there is a bug when overlap is enabled.
-        # Please ensure overlap is disabled when using this functionality to avoid unexpected behavior.
-        real_token_num = share_inputs["accept_num_cpu"].sum()
+        assert mask_bsz is not None
         sampler_output.logprobs_tensors = LogprobsTensors(
-            logprob_token_ids=sampler_output.logprobs_tensors.logprob_token_ids[:real_token_num],
-            logprobs=sampler_output.logprobs_tensors.logprobs[:real_token_num],
-            selected_token_ranks=sampler_output.logprobs_tensors.selected_token_ranks[:real_token_num],
+            logprob_token_ids=sampler_output.logprobs_tensors.logprob_token_ids[:mask_bsz],
+            logprobs=sampler_output.logprobs_tensors.logprobs[:mask_bsz],
+            selected_token_ranks=sampler_output.logprobs_tensors.selected_token_ranks[:mask_bsz],
         )
         sampler_output.logprobs_tensors = logprobs_renormalize_with_logz(
             sampler_output.logprobs_tensors.logprobs,
