@@ -575,26 +575,6 @@ struct StoreFunc<T, VEC_SIZE, T> {
     PD_THROW("not support the group_size", group_size);      \
   }
 
-#define DISPATCH_GQA_GROUP_SIZE(group_size, GROUP_SIZE, ...) \
-  if (group_size == 1) {                                     \
-    constexpr size_t GROUP_SIZE = 1;                         \
-    __VA_ARGS__                                              \
-  } else if (group_size == 8) {                              \
-    constexpr size_t GROUP_SIZE = 8;                         \
-    __VA_ARGS__                                              \
-  } else if (group_size == 12) {                             \
-    constexpr size_t GROUP_SIZE = 12;                        \
-    __VA_ARGS__                                              \
-  } else if (group_size == 14) {                             \
-    constexpr size_t GROUP_SIZE = 14;                        \
-    __VA_ARGS__                                              \
-  } else if (group_size == 16) {                             \
-    constexpr size_t GROUP_SIZE = 16;                        \
-    __VA_ARGS__                                              \
-  } else {                                                   \
-    PD_THROW("not support the group_size", group_size);      \
-  }
-
 #define DISPATCH_BLOCKSHAPE_Q(block_shape_q, BLOCK_SHAPE_Q, NUM_WARP_Q, ...) \
   if (block_shape_q <= 16) {                                                 \
     constexpr size_t BLOCK_SHAPE_Q = 16;                                     \

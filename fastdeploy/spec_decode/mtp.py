@@ -409,16 +409,13 @@ class MTPProposer(Proposer):
             "decode_block_indices" in self.target_model_inputs
             and self.target_model_inputs["decode_block_indices"] is not None
         ):
-            self.model_inputs["decode_block_indices"] = paddle.zeros_like(
-                self.target_model_inputs["decode_block_indices"]
-            )
-            self.model_inputs["decode_num_blocks"] = paddle.zeros_like(self.target_model_inputs["decode_num_blocks"])
-            self.model_inputs["decode_chunk_size"] = paddle.zeros_like(self.target_model_inputs["decode_chunk_size"])
-            self.model_inputs["decode_tmp_workspace"] = paddle.zeros_like(
-                self.target_model_inputs["decode_tmp_workspace"]
-            )
-            self.model_inputs["decode_tmp_m"] = paddle.zeros_like(self.target_model_inputs["decode_tmp_m"])
-            self.model_inputs["decode_tmp_d"] = paddle.zeros_like(self.target_model_inputs["decode_tmp_d"])
+            self.model_inputs["decode_block_indices"] = self.target_model_inputs["decode_block_indices"]
+
+            self.model_inputs["decode_num_blocks"] = self.target_model_inputs["decode_num_blocks"]
+            self.model_inputs["decode_chunk_size"] = self.target_model_inputs["decode_chunk_size"]
+            self.model_inputs["decode_tmp_workspace"] = self.target_model_inputs["decode_tmp_workspace"]
+            self.model_inputs["decode_tmp_m"] = self.target_model_inputs["decode_tmp_m"]
+            self.model_inputs["decode_tmp_d"] = self.target_model_inputs["decode_tmp_d"]
 
         # Get the attention backend
         attn_cls = get_attention_backend()
